@@ -15,20 +15,33 @@ def generate_x_grid(num_components: int, steps: int) -> np.ndarray:
     
     x_matrix = np.zeros((M, num_components))
 
-
-    # # Generate all integer combinations that sum to (steps - 1)
-    # grid_ticks = steps - 1
-    # comps = []
+    grid_ticks = steps - 1
     
-    # for combo in combinations_with_replacement(range(grid_ticks + 1), num_components - 1):
-    #     # Calculate individual coordinate elements
-    #     combo = (0,) + combo + (grid_ticks,)
-    #     fractions = [np.float64(combo[i+1] - combo[i]) / grid_ticks for i in range(num_components)]
-    #     comps.append(fractions)
+    # We use a standard iterative stack to find valid tick combinations
+    stack = [(0, 0, grid_ticks)]  # Elements: (component_index, start_tick, remaining_ticks)
+    current_ticks = [0] * num_components
+    row_idx = 0
+
+    while stack:
+        c_idx, start, remaining = stack.pop()
+        
+        # Base case: We are at the second-to-last component
+        if c_idx == num_components - 1:
+            current_ticks[c_idx] = remaining
+            # Convert ticks to mole fractions directly into the pre-allocated row
+            for i in range(num_components):
+                x_matrix[row_idx, i] = current_ticks[i] / grid_ticks
+            row_idx += 1
+            continue
+
+        # Push the next layer of tick options onto the stack
+        for ticks in range(start, remaining + 1):
+            current_ticks[c_idx] = ticks
+            stack.append((c_idx + 1, 0, remaining - ticks))
         
     return np.array(x_matrix)
 
-def create_gamma_matrix(num_components: int, steps: int, gp_models: list = None, **gp_kwargs) -> np.ndarray:
+def generate_gamma_grid(num_components: int, steps: int) -> np.ndarray:
     """
     Generates an array of shape (M, num_components) representing all activity coefficient 
     combinations on a grid
@@ -62,14 +75,14 @@ class SLESolver:
         
         # Calculate low temperature behavior (below T_ss)
         # Using the exact analytical conversion logic in your loop:
-        A = -comp.t_fus * comp.h_fus * comp.t_ss - comp.t_fus * comp.h_ss * comp.t_ss
-        B = comp.t_fus * comp.t_ss * self.R * np.log(x_i[mask]*gamma_i[mask])
-        C = -comp.h_fus * comp.t_ss - comp.h_ss * comp.t_fus
-        T_low = A / (B + C)
+        # A = -comp.t_fus * comp.h_fus * comp.t_ss - comp.t_fus * comp.h_ss * comp.t_ss
+        # B = comp.t_fus * comp.t_ss * self.R * np.log(x_i[mask]*gamma_i[mask])
+        # C = -comp.h_fus * comp.t_ss - comp.h_ss * comp.t_fus
+        # T_low = A / (B + C)
 
-        T[mask] = np.where(T_high < comp.t_ss, T_low, T_high)
+        T[mask] = T_high # np.where(T_high < comp.t_ss, T_low, T_high)
         T[~mask] = 0.0 
-        
+        print(T)
         return T
 
     def solve(self, mixture: Mixture, steps: int = 11) -> np.ndarray:
@@ -79,8 +92,9 @@ class SLESolver:
         Returns:
             numpy array: Shape (M, N + 1) where columns are [x_1, x_2, ... x_N, T_SLE]
         """
-        # Generate multi-dimensional compositional space matrix
-        x_matrix = generate_simplex_grid(mixture.num_components, steps=steps)
+        # Generate multi-dimensional compositional space and activity coefficient matrix
+        x_matrix = generate_x_grid(mixture.num_components, steps)
+        gamma_matrix = generate_gamma_grid(mixture.num_components, steps)
         M = x_matrix.shape[0]
         
         # Compute individual liquidus temperatures for every single component
@@ -90,6 +104,6 @@ class SLESolver:
             T_liquidus_matrix[:, i] = self._compute_component_liquidus(x_matrix[:, i], gamma_matrix[:, i], comp)
             
         # Apply the maximum thermodynamic envelope principle
-        t_sle = np.max(T_liquidus_matrix, axis=1)
+        T_sle = np.max(T_liquidus_matrix, axis=1)
         
-        return np.column_stack((x_matrix, t_sle))
+        return np.column_stack((x_matrix, T_sle))
