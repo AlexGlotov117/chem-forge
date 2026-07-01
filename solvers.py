@@ -6,40 +6,35 @@ from chemicals import Compound, Mixture
 
 def generate_x_grid(num_components: int, steps: int) -> np.ndarray:
     """
-    Generates an array of shape (M, num_components) representing all valid mole fraction 
-    combinations on a grid where the sum of components equals 1.0.
+    Generates an array of shape (M, num_components) representing all valid 
+    mole fraction combinations where the sum of components equals 1.0.
     """
-
-    # Formula: nCr(steps + num_components - 2, num_components - 1)
+    # Formula for total combinations: nCr(steps + num_components - 2, num_components - 1)
     M = math.comb(steps + num_components - 2, num_components - 1)
-    
     x_matrix = np.zeros((M, num_components))
-
     grid_ticks = steps - 1
     
-    # We use a standard iterative stack to find valid tick combinations
-    stack = [(0, 0, grid_ticks)]  # Elements: (component_index, start_tick, remaining_ticks)
-    current_ticks = [0] * num_components
+    # Each stack item stores: (component_index, remaining_ticks, history_list)
+    # This prevents different branches from overwriting each other's data
+    stack = [(0, grid_ticks, [])]
     row_idx = 0
-
+    
     while stack:
-        c_idx, start, remaining = stack.pop()
+        c_idx, remaining, history = stack.pop()
         
-        # Base case: We are at the second-to-last component
+        # Base case: We reached the final component, which takes all leftovers
         if c_idx == num_components - 1:
-            current_ticks[c_idx] = remaining
-            # Convert ticks to mole fractions directly into the pre-allocated row
+            full_path = history + [remaining]
             for i in range(num_components):
-                x_matrix[row_idx, i] = current_ticks[i] / grid_ticks
+                x_matrix[row_idx, i] = full_path[i] / grid_ticks
             row_idx += 1
             continue
-
-        # Push the next layer of tick options onto the stack
-        for ticks in range(start, remaining + 1):
-            current_ticks[c_idx] = ticks
-            stack.append((c_idx + 1, 0, remaining - ticks))
-        
-    return np.array(x_matrix)
+            
+        # Push options onto the stack, appending choices to a local history copy
+        for ticks in range(0, remaining + 1):
+            stack.append((c_idx + 1, remaining - ticks, history + [ticks]))
+            
+    return x_matrix
 
 def generate_gamma_grid(num_components: int, steps: int) -> np.ndarray:
     """
@@ -82,15 +77,21 @@ class SLESolver:
 
         T[mask] = T_high # np.where(T_high < comp.t_ss, T_low, T_high)
         T[~mask] = 0.0 
-        print(T)
         return T
 
     def solve(self, mixture: Mixture, steps: int = 11) -> np.ndarray:
         """
-        Computes the SLE matrix across the entire composition space.
-        
+        Computes individual liquidus trajectories and extracts the collective SLE envelope.
+
+        Inputs:
+            mixture (Mixture): The chemical system containing compounds and active parameters.
+            steps (int): The number of resolution ticks mapped across the composition grid.
+
         Returns:
-            numpy array: Shape (M, N + 1) where columns are [x_1, x_2, ... x_N, T_SLE]
+            tuple: A structural payload containing three distinct matrix collections:
+                - x_matrix (np.ndarray): Shape (M, N) containing the mole fractions for all N components.
+                - T_liquidus_matrix (np.ndarray): Shape (M, N) tracking the independent melting curves.
+                - T_sle (np.ndarray): Shape (M, 1) tracking the final unified solid-liquid equilibrium boundary.
         """
         # Generate multi-dimensional compositional space and activity coefficient matrix
         x_matrix = generate_x_grid(mixture.num_components, steps)
@@ -98,12 +99,12 @@ class SLESolver:
         M = x_matrix.shape[0]
         
         # Compute individual liquidus temperatures for every single component
-        T_liquidus_matrix = np.zeros((M, mixture.num_components))
+        T_matrix = np.zeros((M, mixture.num_components))
         
         for i, comp in enumerate(mixture.compounds):
-            T_liquidus_matrix[:, i] = self._compute_component_liquidus(x_matrix[:, i], gamma_matrix[:, i], comp)
+            T_matrix[:, i] = self._compute_component_liquidus(x_matrix[:, i], gamma_matrix[:, i], comp)
             
         # Apply the maximum thermodynamic envelope principle
-        T_sle = np.max(T_liquidus_matrix, axis=1)
+        T_sle = np.max(T_matrix, axis=1)
         
-        return np.column_stack((x_matrix, T_sle))
+        return x_matrix, T_matrix, T_sle
