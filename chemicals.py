@@ -18,7 +18,18 @@ class Compound:
     
     # Static attributes for CEA integration
     enthalpy_units: str = "kJ/mol"
-    ref_temperature: float = 298.15
+    ref_temperature: float = 298
+
+    def extract_formula_from_smiles(smiles_str: str) -> dict:
+        mol = Chem.MolFromSmiles(smiles_str)
+        if mol is None: raise ValueError(f"Invalid SMILES: {smiles_str}")
+        mol = Chem.AddHs(mol)
+        formula_dict = {}
+        for atom in mol.GetAtoms():
+            symbol = atom.GetSymbol()
+            formula_dict[symbol] = formula_dict.get(symbol, 0) + 1
+        return formula_dict
+        
 
     @property
     def cea_reactant(self):
@@ -43,7 +54,7 @@ class Compound:
 @dataclass
 class Mixture:
     compounds: List[Compound]
-    oxidizer_name: str = "Air"
+    oxidizer_name: str = "H2O2(L)"
     phi: float = 1.0
     pc_psi: float = 200.0
     supar: List[float] = field(default_factory=lambda: [20.0])
@@ -160,26 +171,26 @@ class Mixture:
         
         hc = self._reac.calc_property(self._cea_lib.ENTHALPY, weights, T_reactant) / self._cea_lib.R
 
-        # # Extract the liquidus temperature for the CURRENT composition
-        # self._ensure_sle_evaluated()
-        # mixture_melting_point = self._sle_cache["Solid-Liquid Equilibrium Temperature"]
+        # Extract the liquidus temperature for the CURRENT composition
+        self._ensure_sle_evaluated()
+        mixture_melting_point = self._sle_cache["Solid-Liquid Equilibrium Temperature"]
         
-        # # 3. If the mixture is thermodynamically a liquid at room temperature (298.15 K),
-        # # inject the heat of fusion for components that are natively solid at 298.15 K.
-        # if mixture_melting_point <= 298.15:
-        #     delta_h_phase_change = 0.0
+        # 3. If the mixture is thermodynamically a liquid at room temperature (298.15 K),
+        # inject the heat of fusion for components that are natively solid at 298.15 K.
+        if mixture_melting_point <= 298.15:
+            delta_h_phase_change = 0.0
             
-        #     for i, comp in enumerate(self.compounds):
-        #         # If the pure compound's melting point is above room temp, it's natively solid.
-        #         # Since the mixture is liquid, it has absorbed its heat of fusion due to mixing.
-        #         if comp.T_fus > 298.0:
-        #             # Scale by mole fraction (or convert to mass fraction if your CEA hc handles mass)
-        #             # Since CEA's calc_property returns molar enthalpy over R (J/mol / R), 
-        #             # we add the mole-fraction weighted molar heat of fusion divided by R.
-        #             delta_h_phase_change += self._current_x[i] * (comp.h_fus / self._cea_lib.R)
+            for i, comp in enumerate(self.compounds):
+                # If the pure compound's melting point is above room temp, it's natively solid.
+                # Since the mixture is liquid, it has absorbed its heat of fusion due to mixing.
+                if comp.T_fus > 298.0:
+                    # Scale by mole fraction (or convert to mass fraction if your CEA hc handles mass)
+                    # Since CEA's calc_property returns molar enthalpy over R (J/mol / R), 
+                    # we add the mole-fraction weighted molar heat of fusion divided by R.
+                    delta_h_phase_change += self._current_x[i] * (comp.h_fus / self._cea_lib.R)
             
-        #     # Apply the phase transition energy boost to the fuel reactant pool
-        #     hc += delta_h_phase_change
+            # Apply the phase transition energy boost to the fuel reactant pool
+            hc += delta_h_phase_change
 
         self._solver_rocket.solve(self._solution, weights, pc_bar, hc=hc, supar=self.supar, iac=True)
         
