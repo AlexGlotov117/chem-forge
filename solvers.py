@@ -57,7 +57,7 @@ class SLESolver:
         given its mole fraction vector array x_i and the activity coefficient vectory array gamma_i.
         """
         # Initialize array with pure melting temperature
-        T = np.full_like(x_i, comp.T_fus)
+        T = np.zeros_like(x_i)
         
         # Avoid runtime warnings safely by masking pure 0 entries
         mask = x_i > 0

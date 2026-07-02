@@ -146,7 +146,7 @@ class Mixture:
         self._init_cea_engine()
 
         N = len(self.compounds)
-        T_reactant = np.array([300.0] * (N + 1))
+        T_reactant = np.array([298.0] * (N + 1))
         pc_bar = self._cea_lib.units.psi_to_bar(self.pc_psi)
         
         mass_components = [self._current_x[i] * comp.mw for i, comp in enumerate(self.compounds)]
@@ -159,6 +159,28 @@ class Mixture:
         weights = self._reac.of_ratio_to_weights(ox_weights, fuel_weights, of_ratio)
         
         hc = self._reac.calc_property(self._cea_lib.ENTHALPY, weights, T_reactant) / self._cea_lib.R
+
+        # # Extract the liquidus temperature for the CURRENT composition
+        # self._ensure_sle_evaluated()
+        # mixture_melting_point = self._sle_cache["Solid-Liquid Equilibrium Temperature"]
+        
+        # # 3. If the mixture is thermodynamically a liquid at room temperature (298.15 K),
+        # # inject the heat of fusion for components that are natively solid at 298.15 K.
+        # if mixture_melting_point <= 298.15:
+        #     delta_h_phase_change = 0.0
+            
+        #     for i, comp in enumerate(self.compounds):
+        #         # If the pure compound's melting point is above room temp, it's natively solid.
+        #         # Since the mixture is liquid, it has absorbed its heat of fusion due to mixing.
+        #         if comp.T_fus > 298.0:
+        #             # Scale by mole fraction (or convert to mass fraction if your CEA hc handles mass)
+        #             # Since CEA's calc_property returns molar enthalpy over R (J/mol / R), 
+        #             # we add the mole-fraction weighted molar heat of fusion divided by R.
+        #             delta_h_phase_change += self._current_x[i] * (comp.h_fus / self._cea_lib.R)
+            
+        #     # Apply the phase transition energy boost to the fuel reactant pool
+        #     hc += delta_h_phase_change
+
         self._solver_rocket.solve(self._solution, weights, pc_bar, hc=hc, supar=self.supar, iac=True)
         
         h_reactants_j = hc * self._cea_lib.R * T_reactant
@@ -167,13 +189,21 @@ class Mixture:
         self._cea_cache = {
             "Adiabatic Flame Temperature": self._solution.T,
             "Characteristic Velocity": self._solution.c_star,
-            "Specific Impulse": self._solution.Isp,
+            "Specific Impulse": self._solution.Isp/9.81,
             # "h_combustion": h_reactants_j - h_products_j
         }
 
     # -------------------------------------------------------------------------
     # Completely Decoupled Public Properties
     # -------------------------------------------------------------------------
+    @property
+    def num_components(self) -> int:
+        return len(self.compounds)
+    
+    @property
+    def names(self) -> List[str]:
+        return [c.name for c in self.compounds]
+    
     @property
     def T_fus(self) -> float:
         self._ensure_sle_evaluated()
