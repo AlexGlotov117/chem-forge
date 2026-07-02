@@ -29,8 +29,10 @@ compounds_list = [
 
 # Build the generic mixture object
 system_mixture = Mixture(compounds=compounds_list)
+system_mixture.set_composition(x=np.array([0.4, 0.6]))
 
-system_mixture.set_composition(x=np.array([0.4, 0.6]), gamma=np.array([1.15, 0.92]))
-
-print(system_mixture.T_fus)           
+print(system_mixture.T_fus)
+print(system_mixture.T_liq)  
+print(system_mixture.T_adi)  
+print(system_mixture.c_star)        
 print(system_mixture.isp)

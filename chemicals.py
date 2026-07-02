@@ -50,14 +50,41 @@ class Mixture:
     
     def __post_init__(self):
         """
-        Initializes heavy engines once. Sets up state attributes 
-        for tracking composition, gammas, and cached evaluations.
+        Pure data allocation. No heavy computational solvers, packages, 
+        or chemistry engines are instantiated here.
         """
+        # Context/State Tracking
+        self._current_x: Optional[np.ndarray] = None
+        self._current_gamma: Optional[np.ndarray] = None
+        
+        # Split Execution Caches
+        self._sle_cache: Dict[str, Any] = {}
+        self._cea_cache: Dict[str, Any] = {}
+        
+        # Lazy Solver Handles (Kept completely unallocated at start)
+        self._solver_sle = None
+        self._cea_lib = None
+        self._reac = None
+        self._solver_rocket = None
+        self._solution = None
+
+    # -------------------------------------------------------------------------
+    # Just-In-Time Solver Spin Ups
+    # -------------------------------------------------------------------------
+    def _init_sle_engine(self):
+        """Instantiates the native SLE solver only when needed."""
+        if self._solver_sle is not None:
+            return
         from solvers import SLESolver
+        self._solver_sle = SLESolver()
+
+    def _init_cea_engine(self):
+        """Loads CEA library and builds rocket mechanisms only when needed."""
+        if self._cea_lib is not None:
+            return  
+            
         import cea
         self._cea_lib = cea  
-        
-        # Instantiate background CEA mechanics
         fuels_cea = [comp.cea_reactant for comp in self.compounds]
         reac_names = fuels_cea + [self.oxidizer_name]
         
@@ -66,109 +93,63 @@ class Mixture:
         
         self._solver_rocket = cea.RocketSolver(prod, reactants=self._reac)
         self._solution = cea.RocketSolution(self._solver_rocket)
-
-        self._solver_sle = SLESolver()
-
-        # State tracking variables for evaluation / lazy loading
-        self._current_x: Optional[np.ndarray] = None
-        self._current_gamma: Optional[np.ndarray] = None
-        self._cache: Dict[str, Any] = {}
-
-    @property
-    def num_components(self) -> int:
-        return len(self.compounds)
-
-    @property
-    def names(self) -> List[str]:
-        return [c.name for c in self.compounds]
-
+    
     # -------------------------------------------------------------------------
-    # State Management / Context Setting
+    # State & Caching Logic
     # -------------------------------------------------------------------------
-    def set_composition(self, x: np.ndarray, gamma: Optional[np.ndarray] = None):
-        """
-        Sets the active composition context for the mixture. Resets the internal
-        cache only if the inputs have shifted.
-        """
+    def set_composition(self, x: np.ndarray, gamma: Optional[np.ndarray] = None, force_recalc: bool = False):
         x = np.asarray(x)
-        if len(x) != self.num_components:
-            raise ValueError(f"Composition size ({len(x)}) must match components ({self.num_components})")
-        
         if gamma is None:
             gamma = np.ones_like(x)
         else:
             gamma = np.asarray(gamma)
 
-        # Check if state changed to prevent breaking cache unnecessarily
-        if self._current_x is None or not np.allclose(self._current_x, x) or not np.allclose(self._current_gamma, gamma):
+        state_changed = (self._current_x is None or 
+                         not np.allclose(self._current_x, x) or 
+                         not np.allclose(self._current_gamma, gamma))
+
+        if state_changed or force_recalc:
             self._current_x = x.copy()
             self._current_gamma = gamma.copy()
-            self._cache.clear()  # Purge cache for a fresh lazy-eval cycle
+            self._sle_cache.clear()
+            self._cea_cache.clear()
 
-    def _ensure_evaluated(self):
-        """Internal safeguard to force processing if properties are called raw."""
+    # -------------------------------------------------------------------------
+    # Isolated On-Demand Evaluation Triggers
+    # -------------------------------------------------------------------------
+    def _ensure_sle_evaluated(self):
         if self._current_x is None:
-            raise ValueError("Mixture state not initialized. Call mixture.set_composition(x, gamma) first.")
-        if not self._cache:
-            self._cache = self.evaluate_at(self._current_x, self._current_gamma)
+            raise ValueError("Set composition first via mixture.set_composition()")
+        if self._sle_cache:
+            return
 
-    # -------------------------------------------------------------------------
-    # On-The-Fly Individual Property Accessors
-    # -------------------------------------------------------------------------
-    @property
-    def T_liquidus(self) -> np.ndarray:
-        self._ensure_evaluated()
-        return self._cache["T_liquidus"]
+        # Explicitly initialize the solver right before using it
+        self._init_sle_engine()
 
-    @property
-    def T_fus(self) -> float:
-        """Alias for the overall SLE melting point envelope peak."""
-        self._ensure_evaluated()
-        return self._cache["T_sle"]
-
-    @property
-    def T_adi(self) -> float:
-        self._ensure_evaluated()
-        return self._cache["T_adiabatic"]
-
-    @property
-    def c_star(self) -> float:
-        self._ensure_evaluated()
-        return self._cache["c_star"]
-
-    @property
-    def isp(self) -> float:
-        self._ensure_evaluated()
-        return self._cache["isp"]
-
-    @property
-    def h_c(self) -> float:
-        self._ensure_evaluated()
-        return self._cache["h_combustion"]
-
-    # -------------------------------------------------------------------------
-    # Underlying Core Solvers
-    # -------------------------------------------------------------------------
-    def evaluate_at(self, x: np.ndarray, gamma: np.ndarray) -> Dict[str, Any]:
-        """
-        Calculates and returns all raw performance metrics for the cache map.
-        """
-        N = self.num_components
-        
-        # 1. SLE Phase Loop
+        N = len(self.compounds)
         T_liquidus = np.zeros(N)
         for i, comp in enumerate(self.compounds):
-            x_arr = np.array([x[i]])
-            g_arr = np.array([gamma[i]])
-            T_liquidus[i] = self._solver_sle._compute_component_liquidus(x_arr, g_arr, comp)[0]
-            
-        T_sle_envelope = np.max(T_liquidus)
+            T_liquidus[i] = self._solver_sle._compute_component_liquidus(
+                np.array([self._current_x[i]]), np.array([self._current_gamma[i]]), comp
+            )[0]
+        
+        self._sle_cache = {"Component Liquidus Temperature": T_liquidus, 
+                           "Solid-Liquid Equilibrium Temperature": np.max(T_liquidus)}
 
-        # 2. Rocket Performance Loop
+    def _ensure_cea_evaluated(self):
+        if self._current_x is None:
+            raise ValueError("Set composition first via mixture.set_composition()")
+        if self._cea_cache:
+            return
+
+        # Explicitly initialize CEA right before running combustion loops
+        self._init_cea_engine()
+
+        N = len(self.compounds)
         T_reactant = np.array([300.0] * (N + 1))
         pc_bar = self._cea_lib.units.psi_to_bar(self.pc_psi)
         
-        mass_components = [x[i] * comp.mw for i, comp in enumerate(self.compounds)]
+        mass_components = [self._current_x[i] * comp.mw for i, comp in enumerate(self.compounds)]
         total_fuel_mass = sum(mass_components)
         
         fuel_weights = np.array([m / total_fuel_mass for m in mass_components] + [0.0])
@@ -180,16 +161,45 @@ class Mixture:
         hc = self._reac.calc_property(self._cea_lib.ENTHALPY, weights, T_reactant) / self._cea_lib.R
         self._solver_rocket.solve(self._solution, weights, pc_bar, hc=hc, supar=self.supar, iac=True)
         
-        # h_reactants_j = hc * self._cea_lib.R * T_reactant
-        # h_products_j = self._solution.enthalpy * self._cea_lib.R * self._solution.T
-        # h_combustion = h_reactants_j - h_products_j
+        h_reactants_j = hc * self._cea_lib.R * T_reactant
+        h_products_j = self._solution.enthalpy * self._cea_lib.R * self._solution.T
 
-        return {
-            "x": x,
-            "T_liquidus": T_liquidus,
-            "T_sle": T_sle_envelope,
-            "T_adiabatic": self._solution.T,
-            "c_star": self._solution.c_star,
-            "isp": self._solution.Isp,
-            # "h_combustion": h_combustion
+        self._cea_cache = {
+            "Adiabatic Flame Temperature": self._solution.T,
+            "Characteristic Velocity": self._solution.c_star,
+            "Specific Impulse": self._solution.Isp,
+            # "h_combustion": h_reactants_j - h_products_j
         }
+
+    # -------------------------------------------------------------------------
+    # Completely Decoupled Public Properties
+    # -------------------------------------------------------------------------
+    @property
+    def T_fus(self) -> float:
+        self._ensure_sle_evaluated()
+        return self._sle_cache["Solid-Liquid Equilibrium Temperature"]
+
+    @property
+    def T_liq(self) -> np.ndarray:
+        self._ensure_sle_evaluated()
+        return self._sle_cache["Component Liquidus Temperature"]
+
+    @property
+    def T_adi(self) -> float:
+        self._ensure_cea_evaluated()
+        return self._cea_cache["Adiabatic Flame Temperature"]
+
+    @property
+    def c_star(self) -> float:
+        self._ensure_cea_evaluated()
+        return self._cea_cache["Characteristic Velocity"]
+
+    @property
+    def isp(self) -> float:
+        self._ensure_cea_evaluated()
+        return self._cea_cache["Specific Impulse"]
+
+    # @property
+    # def H_combustion(self) -> float:
+    #     self._ensure_cea_evaluated()
+    #     return self._cea_cache["h_combustion"]
