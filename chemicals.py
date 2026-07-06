@@ -43,7 +43,7 @@ class Compound:
             raise ValueError(f"Chemical formula dictionary missing for CEA component: {self.name}")
             
         return cea.Reactant(
-            name=f"{self.name}",
+            name=f"{self.name.strip()[:15]}",
             formula=self.formula,
             molecular_weight=self.mw,
             enthalpy=self.h_f_298/1000,

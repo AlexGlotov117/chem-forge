@@ -2,11 +2,13 @@
 
 import numpy as np
 import pandas as pd
+import os
 # import matplotlib.pyplot as plt
 from rdkit import Chem
 from rdkit.Chem.Descriptors import ExactMolWt
 
 from chemicals import Compound, Mixture
+from solvers import generate_x_grid
 
 pureComponents = pd.read_excel("pureComponents.xlsx", sheet_name="Input")
 cominations = pd.read_excel("combinations.xlsx", sheet_name=None)
@@ -34,11 +36,10 @@ def create_compound_from_smiles(input_smiles: str) -> Compound:
         formula_dict[symbol] = formula_dict.get(symbol, 0) + 1
     
     # Force a fallback to a short name if Symbol is missing, and slice at 15 chars max
-    display_name = str(row["Symbol"]) if pd.notna(row["Symbol"]) else str(row["Full Name"])
-    cea_name = display_name.strip()[:15] # Hard limit to 15 characters for CEA safety
+    cea_name = str(row["Full Name"]).strip()[:15] # Hard limit to 15 characters for CEA safety
 
     return Compound(
-        name=cea_name,  
+        name=str(row["Full Name"]),  
         mw=ExactMolWt(mol),
         T_fus=float(row["Melting Temp\n[K]"]),
         h_fus=float(row["Heat of Fusion\n[J/mol]"]),
@@ -72,54 +73,49 @@ for sheet_name, df_combos in cominations.items():
             
             # Build your uniform mixture engine
             mixture = Mixture(compounds=compounds_list)
-            
-            if mixture.num_components != 2:
-                raise ValueError(f"This sweeping function is designed for binary (2-component) mixtures. "
-                                    f"Provided mixture has {mixture.num_components} components: {mixture.names}")
 
-            # Extract dynamic labels from the mixture instance
-            comp_0_name, comp_1_name = mixture.names
+            # Generate the composition matrix
+            x_grid_matrix = generate_x_grid(num_components=mixture.num_components, steps=num_points)
 
-            # Generate a smooth composition grid for the primary component (0.0 to 1.0)
-            x_grid = np.linspace(0.0, 1.0, num_points)
+            records = []
 
-            t_melting_points = []
-            isp_values = []
-        
-            # Sweep across the composition axis
-            for x0 in x_grid:
-                # Vectorized array allocation summing exactly to 1.0
-                x_vec = np.array([x0, 1.0 - x0])
-                
-                # Pass context to the state machine
+            # 3. Sweep across the N-dimensional composition matrix
+            for x_vec in x_grid_matrix:
+                # Pass the current composition row vector (e.g., [0.2, 0.5, 0.3]) to the state machine
                 mixture.set_composition(x=x_vec)
+                
+                # 4. Safely extract properties on-the-fly with a fallback catch
+                try:
+                    # If mixture.isp returns a list/array index accordingly, adjust to match your class output
+                    current_isp = mixture.isp
+                    current_t_adi = mixture.T_adi
+                    current_c_star = mixture.c_star
+                except Exception:
+                    current_isp = np.nan
+                    current_t_adi = np.nan
+                    current_c_star = np.nan
 
-                # Safely extract properties on-the-fly
-                t_melting_points.append(mixture.T_fus)
-
-                isp_values.append(mixture.isp[1])
+                # 5. Build a dynamic row record mapping compositions back to column names cleanly
+                row_record = {}
+                for i, name in enumerate(mixture.names):
+                    row_record[f"{name} Molar Composition \n[%]"] = x_vec[i]
+                    # If your Mixture class tracks liquidus temperatures per component:
+                    row_record[f"{name} Liquidus Temperature \n[K]"] = mixture.T_liq[i]
                     
-            # Plot Generation
-            import matplotlib.pyplot as plt
-            fig, ax1 = plt.subplots(figsize=(8, 5))
+                # Append the thermodynamic metrics
+                row_record["Solid-Liquid Equilibrium Temperature \n[K]"] = mixture.T_fus
+                row_record["Adiabatic Flame Temperature \n[K]"] = current_t_adi
+                row_record["Characteristic Velocity \n[m/s]"] = current_c_star
+                row_record["Specific Impulse \n[s]"] = current_isp
+                
+                records.append(row_record)
 
-            # Left Y-Axis: Liquidus / Phase Behavior
-            color_sle = 'tab:blue'
-            ax1.set_xlabel(f'Mole Fraction of {comp_0_name} ($x_{{{comp_0_name}}}$)')
-            ax1.set_ylabel('Liquidus Temperature $T_m$ (K)', color=color_sle)
-            ax1.plot(x_grid, t_melting_points, color=color_sle, linewidth=2, label="Liquidus Envelope")
-            ax1.tick_params(axis='y', labelcolor=color_sle)
-            ax1.grid(True, linestyle=':', alpha=0.6)
-
-            ax2 = ax1.twinx()  
-            color_cea = 'tab:red'
-            ax2.set_ylabel('CEA Performance', color=color_cea)
-            ax2.plot(x_grid, isp_values, color=color_cea, linestyle='--', linewidth=2, label="$I_{sp}$")
-            ax2.tick_params(axis='y', labelcolor=color_cea)
-
-            fig.tight_layout()
-            plt.title(f"{comp_0_name} + {comp_1_name}")
-            plt.show()
+            # 6. Convert to DataFrame and save to CSV
+            df_results = pd.DataFrame(records)
+            
+            system_label = "_".join(mixture.names)
+            filename = f"{system_label}.csv"
+            df_results.to_csv(os.path.join('test_cases', filename), index=False)
             
         except Exception as e:
             print(f"Skipping index row {idx} due to calculation error: {e}")
