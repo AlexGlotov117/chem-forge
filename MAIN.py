@@ -10,6 +10,8 @@ from rdkit.Chem.Descriptors import ExactMolWt
 from chemicals import Compound, Mixture
 from solvers import generate_x_grid
 
+output_dir = "screening_results"
+
 pureComponents = pd.read_excel("pureComponents.xlsx", sheet_name="Input")
 cominations = pd.read_excel("combinations.xlsx", sheet_name=None)
 
@@ -87,9 +89,9 @@ for sheet_name, df_combos in cominations.items():
                 # 4. Safely extract properties on-the-fly with a fallback catch
                 try:
                     # If mixture.isp returns a list/array index accordingly, adjust to match your class output
-                    current_isp = mixture.isp
-                    current_t_adi = mixture.T_adi
-                    current_c_star = mixture.c_star
+                    current_isp = mixture.isp[2]
+                    current_t_adi = mixture.T_adi[0]
+                    current_c_star = mixture.c_star[0]
                 except Exception:
                     current_isp = np.nan
                     current_t_adi = np.nan
@@ -115,7 +117,9 @@ for sheet_name, df_combos in cominations.items():
             
             system_label = "_".join(mixture.names)
             filename = f"{system_label}.csv"
-            df_results.to_csv(os.path.join('test_cases', filename), index=False)
+
+            os.makedirs(output_dir, exist_ok=True)
+            df_results.to_csv(os.path.join(output_dir, filename), index=False)
             
         except Exception as e:
             print(f"Skipping index row {idx} due to calculation error: {e}")

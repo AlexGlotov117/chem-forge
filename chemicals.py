@@ -54,7 +54,7 @@ class Compound:
 @dataclass
 class Mixture:
     compounds: List[Compound]
-    oxidizer_name: str = "H2O2(L)"
+    oxidizer_name: str = "Air"
     phi: float = 1.0
     pc_psi: float = 200.0
     supar: List[float] = field(default_factory=lambda: [20.0])
