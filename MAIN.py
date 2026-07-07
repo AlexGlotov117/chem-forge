@@ -126,25 +126,35 @@ from surrogates import MultiTaskGaussianProcess
 #             print(f"Skipping index row {idx} due to calculation error: {e}")
 
 ### CALEB BELL STUFF
-def extractor(smiles):
+def basic_features(smiles):
     mol = Chem.MolFromSmiles(smiles)
     return [Descriptors.ExactMolWt(mol), Descriptors.NumRotatableBonds(mol)]
 
+
+def standard_molecular_features(smiles_str):
+    """
+    Converts a SMILES string into a high-dimensional structural fingerprint.
+    Replaces simple metrics with a 2048-bit structural topology vector.
+    """
+
+    from rdkit.Chem import AllChem
+    mol = Chem.MolFromSmiles(smiles_str)
+    if mol is None:
+        # Fallback to an empty vector if SMILES parsing fails
+        return np.zeros(2048, dtype=float)
+        
+    # Generate a radius-2 Morgan Fingerprint (equivalent to ECFP4)
+    fingerprint = AllChem.GetMorganFingerprintAsBitVect(mol, radius=2, nBits=2048)
+    
+    # Convert the internal RDKit bit vector into a standard NumPy array for our distance matrix
+    features = np.zeros((1,), dtype=float)
+    Chem.DataStructs.ConvertToNumpyArray(fingerprint, features)
+    
+    return features
+
 # Step 1: Initialize the tracking space with the full master property vector
 properties = ["T_fus", "H_fus"]
-engine = MultiTaskGaussianProcess(properties, extractor)
-
-# Case A: water 
-means, uncertainties = engine.queryProperties("O", ["T_fus", "H_fus"])
-print("Water Evaluation:")
-print(f"  Means: {means}")
-print(f"  Uncertainties: {uncertainties}")
-
-# Case B: glycerol 
-means, uncertainties = engine.queryProperties("C(C(CO)O)O", ["T_fus", "H_fus"])
-print("Glycerol Evaluation:")
-print(f"  Means: {means}")
-print(f"  Uncertainties: {uncertainties}")
+engine = MultiTaskGaussianProcess(properties, standard_molecular_features)
 
 smile_pool = ["O", "C(C(CO)O)O", "CC(N)=O", "c1c[nH]cn1"]
 
