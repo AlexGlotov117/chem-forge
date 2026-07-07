@@ -131,7 +131,7 @@ def extractor(smiles):
     return [Descriptors.ExactMolWt(mol), Descriptors.NumRotatableBonds(mol)]
 
 # Step 1: Initialize the tracking space with the full master property vector
-properties = ["T_fus", "H_fus", "H_formation"]
+properties = ["T_fus", "H_fus"]
 engine = MultiTaskGaussianProcess(properties, extractor)
 
 # Case A: water 
@@ -145,3 +145,10 @@ means, uncertainties = engine.queryProperties("C(C(CO)O)O", ["T_fus", "H_fus"])
 print("Glycerol Evaluation:")
 print(f"  Means: {means}")
 print(f"  Uncertainties: {uncertainties}")
+
+smile_pool = ["O", "C(C(CO)O)O", "CC(N)=O", "c1c[nH]cn1"]
+
+seed_smiles, X_seed, y_seed = engine.compileInitialSeed(smile_pool, 3)
+print(seed_smiles)
+print(X_seed)
+print(y_seed)

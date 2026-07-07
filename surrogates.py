@@ -47,82 +47,87 @@ class MultiTaskGaussianProcess:
         
         self.model = None
 
-    # def _query_databases(self, smiles_str, prop_name):
-    #     """
-    #     Dynamically queries all available thermodynamic data and calculation methods 
-    #     from chemical librarys for ANY registered property.
-    #     """
-    #     if prop_name not in PROPERTY_MAP:
-    #         print(f"Warning: Property '{prop_name}' is not configured in PROPERTY_MAP.")
-    #         return None
-            
-    #     prop_config = PROPERTY_MAP[prop_name]
+    def _compute_distance_matrix(self, smiles_pool):
+        """Computes a structural distance matrix across the candidate pool."""
+        features = np.array([self.feature_extractor(s) for s in smiles_pool])
+        # Compute pairwise Euclidean distance between molecular feature vectors
+        dot_product = np.dot(features, features.T)
+        square_norms = np.diag(dot_product)
+        distances = np.sqrt(np.maximum(square_norms[:, None] + square_norms[None, :] - 2 * dot_product, 0.0))
+        return distances, features
+
+    def compileInitialSeed(self, smiles_pool, target_seed_size=10, user_target_smiles=None):
+        """
+        Builds a diverse initial seed dataset using ONLY molecules with 
+        experimental/database data. Completely avoids simulation/DFT.
+        """
+        if target_seed_size > len(smiles_pool):
+            raise ValueError(f"Target seed size ({target_seed_size}) cannot exceed your pool size ({len(smiles_pool)}).")
         
-    #     try:
-    #         # Resolve chemical ID and CAS Number from SMILES
-    #         chemical_id = search_chemical(f"SMILES={smiles_str}")
-    #         cas_rn = chemical_id.CASs
-            
-    #         # Dynamically import the target submodule on the fly
-    #         submodule = importlib.import_module(prop_config["module"])
-            
-    #         # Grab the main function and the methods array function using string lookups
-    #         calc_function = getattr(submodule, prop_config["func"])
-    #         methods_function = getattr(submodule, prop_config["methods_func"])
-            
-    #         # Sweep through all valid methods for this molecule
-    #         discovered_values = {}
-            
-    #         # Execution of methods_function(cas_rn) loops through available estimation approaches
-    #         for method in methods_function(cas_rn):
-    #             try:
-    #                 val = calc_function(cas_rn, method=method)
-    #                 if val is not None:
-    #                     discovered_values[method] = val
-    #             except Exception:
-    #                 # Skip individual estimation failures if a specific equation fails to converge
-    #                 continue
-                    
-    #         return discovered_values if discovered_values else None
-
-    #     except Exception as e:
-    #         print(f"Database query failed for {smiles_str} on property {prop_name}: {e}")
-    #         return None
-
-    # def seed_initial_dataset(self, smiles_list, true_target_matrix=None):
-    #     """Seeds the orchestrator with your baseline laboratory Excel entries."""
-    #     features = [self.feature_extractor(s) for s in smiles_list]
-    #     self.X_train_df = pd.DataFrame(features)
-    #     self.trained_smiles = list(smiles_list)
+        distances, features = self._compute_distance_matrix(smiles_pool)
         
-    #     if true_target_matrix is not None:
-    #         self.y_train_matrix = np.array(true_target_matrix)
-    #     else:
-    #         # Fallback to auto-populating from Caleb Bell if no spreadsheet values provided
-    #         self.y_train_matrix = np.zeros((len(smiles_list), len(self.properties)))
-    #         for row_idx, s in enumerate(smiles_list):
-    #             for col_idx, prop in enumerate(self.properties):
-    #                 val = self._query_caleb_bell(s, prop)
-    #                 self.y_train_matrix[row_idx, col_idx] = val if val is not None else np.nan
-        
-    #     # Clean up missing data limits for standard GP wrappers via mean imputation or native proxy
-    #     nas = np.isnan(self.y_train_matrix)
-    #     if np.any(nas):
-    #         col_means = np.nanmean(self.y_train_matrix, axis=0)
-    #         self.y_train_matrix[nas] = np.take(col_means, np.where(nas)[1])
+        selected_indices = []
+        seed_X = []
+        seed_y = []
+        successful_smiles = []
+
+        # Track our pool of candidates we haven't evaluated or rejected yet
+        available_indices = list(range(len(smiles_pool)))
+
+        # Determine initial starting point absolute index
+        if user_target_smiles and user_target_smiles in smiles_pool:
+            current_idx = smiles_pool.index(user_target_smiles)
+        else:
+            global_sum_dist = np.sum(distances, axis=1)
+            current_idx = int(np.argmax(global_sum_dist))
             
-    #     self._retrain_gp()
+        print(f"Initializing experimental seed collection (Target Size: {target_seed_size})...")
 
-    # def _retrain_gp(self):
-    #     """Re-fits the structural-task kernel matrix."""
-    #     kernel = Matern(length_scale=[1.0] * self.X_train_df.shape[1], bounds_error=False)
-    #     self.model = GaussianProcessRegressor(kernel=kernel, n_restarts_optimizer=5, random_state=42)
-    #     self.model.fit(self.X_train_df, self.y_train_matrix)
+        while len(successful_smiles) < target_seed_size and len(available_indices) > 0:
+            smiles = smiles_pool[current_idx]
+            available_indices.remove(current_idx)  # Safely removes the absolute index
+            
+            # Query database without GP fallback
+            means, _ = self.queryProperties(smiles, self.properties)
+            
+            row_values = []
+            is_valid = True
+            for prop in self.properties:
+                val = means.get(prop, None)
+                if val is None:
+                    is_valid = False
+                    break
+                row_values.append(val)
 
-    def queryProperties(self, smiles_str, requested_properties):
+            if is_valid:
+                selected_indices.append(current_idx)
+                seed_X.append(features[current_idx])
+                seed_y.append(row_values)
+                successful_smiles.append(smiles)
+                print(f"  ✅ [Anchor #{len(successful_smiles)}] Secured: {smiles}")
+            else:
+                print(f"  ❌ Skipped (Incomplete database data): {smiles}")
+
+            # Pick the next absolute index if we need more anchors
+            if len(successful_smiles) < target_seed_size and len(available_indices) > 0:
+                if not selected_indices:
+                    # If everything checked so far failed, pick the next highest global variance
+                    global_sum_dist = np.sum(distances[available_indices, :], axis=1)
+                    relative_next_idx = np.argmax(global_sum_dist)
+                    current_idx = available_indices[relative_next_idx]  # Map back to absolute
+                else:
+                    # Standard Max-Min selection against currently approved absolute anchors
+                    sub_dist = distances[available_indices, :][:, selected_indices]
+                    min_distances = np.min(sub_dist, axis=1)
+                    relative_next_idx = np.argmax(min_distances)
+                    current_idx = available_indices[relative_next_idx]
+
+        return successful_smiles, np.array(seed_X), np.array(seed_y)
+
+    def queryProperties(self, smiles_str, requested_properties, experimental_data_only=True):
         """
         [THE GENERIC INTERFACE]
-        Pass a molecule and ANY list of arbitrary registered properties.
+        Pass a molecule and ANY list of arbitrary registered properties. Will first check if data is cached, then checks databases, then predicts using MT-GP
         Returns: {prop: predicted_value}, {prop: uncertainty}
         """
         results_mean = {}
