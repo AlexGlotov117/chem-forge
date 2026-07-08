@@ -86,7 +86,7 @@ class Mixture:
         """Instantiates the native SLE solver only when needed."""
         if self._solver_sle is not None:
             return
-        from solvers import SLESolver
+        from models.solvers import SLESolver
         self._solver_sle = SLESolver()
 
     def _init_cea_engine(self):

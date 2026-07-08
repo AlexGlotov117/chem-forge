@@ -2,7 +2,7 @@ import numpy as np
 import math
 
 from itertools import combinations_with_replacement
-from alexChemicals import Compound, Mixture
+from __temp__.alexChemicals import Compound, Mixture
 
 def generate_x_grid(num_components: int, steps: int) -> np.ndarray:
     """

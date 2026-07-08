@@ -2,7 +2,7 @@ import csv
 import numpy as np
 import pandas as pd
 
-from alexChemicals import Mixture
+from __temp__.alexChemicals import Mixture
 
 def exportSLE(filename: str, mixture: Mixture, x_matrix: np.ndarray, T_matrix: np.ndarray, T_sle: np.ndarray):
     """
