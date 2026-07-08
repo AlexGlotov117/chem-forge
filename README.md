@@ -15,6 +15,12 @@ Rather than locking you into a single fixed model architecture, **ChemForge** pr
 
 ---
 
+## 🤖 AI Disclosure & Disclaimer
+
+Parts of the code and documentation in this repository were generated or assisted by **Google Gemini**.
+
+---
+
 ## 📦 Package Architecture
 
 ```text
