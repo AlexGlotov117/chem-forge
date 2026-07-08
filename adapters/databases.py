@@ -12,8 +12,8 @@ def caleb_bell_db_adapter(target_smiles, requested_properties):
     self.db_query_fn(self.target_entity) is called inside _check_target().
     """
     PROPERTY_MAP = {
-        "T_melt": {"func": "Tm"},
-        "H_fus": {"func": "Hfusm"},
+        "Melting Point": {"func": "Tm"},
+        "Enthalpy of Fusion": {"func": "Hfusm"},
     }
     # 1. Instantiate Chemical object once per unique molecule
     chem_obj = None

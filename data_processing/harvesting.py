@@ -66,7 +66,6 @@ class TargetHarvestingEngine:
 
         attempts = 0
         for candidate in mutator_fn(self.target_smiles):
-            print(candidate)
             attempts += 1
             if attempts > max_attempts:
                 print(f"Reached max generation attempts ({max_attempts}).")
@@ -93,7 +92,7 @@ class TargetHarvestingEngine:
                 "distance": dist
             })
 
-            print(f"Found Valid Neighbor #{len(harvested_neighbors)}: {candidate} | Distance: {dist:.4f}")
+            # print(f"Found Valid Neighbor #{len(harvested_neighbors)}: {candidate} | Distance: {dist:.4f}")
 
             if len(harvested_neighbors) >= k_neighbors:
                 break

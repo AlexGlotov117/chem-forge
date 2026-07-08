@@ -1,7 +1,15 @@
 # To setup conda use: eval "$(/home/aglotov/miniconda3/bin/conda shell.bash hook)"
 
-target_smiles = "[Li+].[BH4-]"
-requested_properties = ["T_melt"]
+from data_processing.harvesting import TargetHarvestingEngine
+from encoders.chemicals import standard_molecular_features
+from adapters.databases import caleb_bell_db_adapter
+from mutators.combinatorial import mutator
+from metrics.chemicals_differences import tanimoto_distance
+from models.gp import StandardGP
+from evaluators.surrogates import HarvestedContextEvaluator
+
+target_smiles = "[BH4-].CCCC[N+](CCCC)(CCCC)CCCC"
+requested_properties = ["Melting Point"]
 
 engine = TargetHarvestingEngine(
     target_smiles=target_smiles,
@@ -10,11 +18,11 @@ engine = TargetHarvestingEngine(
     db_query_fn=caleb_bell_db_adapter
 )
 
-# Run Step 1
-has_data, direct_data = engine._check_target()
+has_data, data = engine._check_target()
 
-# If Step 1 fails, run dynamic Step 2!
-if not has_data:
+if has_data:
+    print(data)
+else:
     harvested_neighbors = engine._harvest_neighbors(
         mutator_fn=mutator,
         distance_metric_fn=tanimoto_distance,
@@ -22,7 +30,7 @@ if not has_data:
     )
 
     # 3. Initialize Step 3 Evaluator
-    evaluator = SurrogateEvaluator(surrogate_model=StandardGPWrapper())
+    evaluator = HarvestedContextEvaluator(surrogate_model=StandardGP())
 
     # 4. Fit & Predict
     predicted_means, predicted_variances = evaluator.fit_and_evaluate(
