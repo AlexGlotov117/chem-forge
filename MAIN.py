@@ -10,7 +10,7 @@ from rdkit.Chem.Descriptors import ExactMolWt
 
 from alexChemicals import Compound, Mixture
 from solvers import generate_x_grid
-from surrogates import MultiTaskGaussianProcess, TargetHarvestingEngine
+from surrogates import MultiTaskGaussianProcess, TargetHarvestingEngine, StandardGPWrapper, SurrogateEvaluator
 # output_dir = "screening_results"
 
 # pureComponents = pd.read_excel("pureComponents.xlsx", sheet_name="Input")
@@ -206,9 +206,12 @@ def caleb_bell_db_adapter(target_smiles, requested_properties):
 
     return extracted_properties
 
+target_smiles = "[Li+].[BH4-]"
+requested_properties = ["T_melt"]
+
 engine = TargetHarvestingEngine(
-    target_smiles="CC[N+](CC)(CC)CC.[BH4-]",
-    requested_properties=["T_melt"],
+    target_smiles=target_smiles,
+    requested_properties=requested_properties,
     featurizer_fn=standard_molecular_features,
     db_query_fn=caleb_bell_db_adapter
 )
@@ -372,7 +375,15 @@ if not has_data:
     harvested_neighbors = engine._harvest_neighbors(
         mutator_fn=mutator,
         distance_metric_fn=tanimoto_distance,
-        k_neighbors=20
+        k_neighbors=5
     )
 
-    print(harvested_neighbors)
+    # 3. Initialize Step 3 Evaluator
+    evaluator = SurrogateEvaluator(surrogate_model=StandardGPWrapper())
+
+    # 4. Fit & Predict
+    predicted_means, predicted_variances = evaluator.fit_and_evaluate(
+        target_x=standard_molecular_features(target_smiles),
+        harvested_neighbors=harvested_neighbors,
+        property_keys=requested_properties
+    )
