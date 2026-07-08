@@ -67,6 +67,7 @@ class TargetHarvestingEngine:
         attempts = 0
         for candidate in mutator_fn(self.target_smiles):
             attempts += 1
+
             if attempts > max_attempts:
                 print(f"Reached max generation attempts ({max_attempts}).")
                 break

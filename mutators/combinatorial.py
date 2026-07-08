@@ -134,3 +134,196 @@ def mutator(target_smiles, num_mutations_per_target=100):
             validated_mol = Chem.MolFromSmiles(full_salt)
             if validated_mol is not None:
                 yield Chem.MolToSmiles(validated_mol, canonical=True)
+
+class SmartActionMutator:
+    """
+    A modular, action-based mutation engine. 
+    New chemical transformations can be registered dynamically as isolated actions.
+    """
+    def __init__(self):
+        self._actions = {}
+        self.history = []
+
+    def register_action(self, name, action_fn):
+        """Register a new mutation action into the engine."""
+        self._actions[name] = action_fn
+
+    def list_actions(self):
+        """List all currently registered mutation actions."""
+        return list(self._actions.keys())
+    
+    def clear_history(self):
+        """Reset the mutation history log."""
+        self.history = []
+
+    def mutate(self, target_smiles, depth=3, active_actions=None):
+        """
+        Mutates target SMILES up to `depth` steps.
+        If depth=2, it mutates the generated candidates to find further neighbors.
+        """
+        self.clear_history()
+        
+        current_frontier = {target_smiles}
+        visited = {target_smiles}
+
+        for current_depth in range(depth):
+            next_frontier = set()
+            
+            for parent_smi in current_frontier:
+                mol = Chem.MolFromSmiles(parent_smi)
+                if mol is None:
+                    continue
+                    
+                actions_to_run = active_actions or self._actions.keys()
+                for action_name in actions_to_run:
+                    action_fn = self._actions[action_name]
+                    
+                    for candidate_smi in action_fn(mol):
+                        if candidate_smi in visited:
+                            self.history.append({
+                                "action": action_name,
+                                "candidate": candidate_smi,
+                                "status": "SKIPPED_DUPLICATE"
+                            })
+                            continue
+
+                        visited.add(candidate_smi)
+                        next_frontier.add(candidate_smi)
+                        
+                        self.history.append({
+                            "action": f"{action_name} (depth {current_depth+1})",
+                            "candidate": candidate_smi,
+                            "status": "GENERATED"
+                        })
+                        yield candidate_smi
+
+            current_frontier = next_frontier
+
+    def print_mutation_report(self):
+        """Prints a clean summary table of all tried mutations."""
+        print("\n" + "="*70)
+        print("                 MUTATION MUTATOR ATTEMPT REPORT               ")
+        print("="*70)
+        print(f"{'#':<4} | {'Action':<20} | {'Status':<25} | {'Candidate SMILES'}")
+        print("-" * 70)
+        for i, entry in enumerate(self.history, 1):
+            print(f"{i:<4} | {entry['action']:<20} | {entry['status']:<25} | {entry['candidate']}")
+        print("="*70 + "\n")
+
+
+# =====================================================================
+# INDIVIDUAL ATOMIC ACTIONS (Add or remove actions here easily!)
+# =====================================================================
+
+def action_halogen_swap(mol):
+    """Action: Swaps Cl <-> Br <-> F <-> I on aliphatic or aromatic sites."""
+    rules = [
+        '[Cl:1] >> [Br:1]', '[Br:1] >> [Cl:1]',
+        '[Cl:1] >> [F:1]',  '[F:1] >> [Cl:1]',
+        '[Cl:1] >> [I:1]',  '[I:1] >> [Cl:1]'
+    ]
+    for smarts in rules:
+        rxn = rdChemReactions.ReactionFromSmarts(smarts)
+        products = rxn.RunReactants((mol,))
+        for prod_tuple in products:
+            for prod in prod_tuple:
+                try:
+                    Chem.SanitizeMol(prod)
+                    yield Chem.MolToSmiles(prod, canonical=True)
+                except Exception:
+                    continue
+
+
+def action_alkyl_extension(mol):
+    """Action: Adds a methyl (-CH3) group to terminal carbons."""
+    rxn = rdChemReactions.ReactionFromSmarts('[C;H3:1] >> [C:1]C')
+    products = rxn.RunReactants((mol,))
+    for prod_tuple in products:
+        for prod in prod_tuple:
+            try:
+                Chem.SanitizeMol(prod)
+                yield Chem.MolToSmiles(prod, canonical=True)
+            except Exception:
+                continue
+
+
+def action_counterion_swap(mol):
+    """Action: Swaps cations/anions if the target is an ionic salt."""
+
+    # Standard database salts
+    ANIONS = ["[Cl-]", "[Br-]", "[I-]", "F[P-](F)(F)(F)(F)F", "F[B-](F)(F)F", "[NO3-]"]
+    CATIONS = ["[Li+]", "[Na+]", "[K+]", "[NH4+]", "CC[N+](CC)(CC)CC"]
+
+    # Break target into separate molecular fragments
+    frags = Chem.GetMolFrags(mol, asMols=True)
+    
+    for frag in frags:
+        frag_smi = Chem.MolToSmiles(frag, canonical=True)
+        
+        # If fragment is a CATION (+1), pair it 1:1 with database ANIONS (-1)
+        if "+" in frag_smi and "-" not in frag_smi:
+            for anion in ANIONS:
+                salt_smi = f"{frag_smi}.{anion}"
+                salt_mol = Chem.MolFromSmiles(salt_smi)
+                if salt_mol:
+                    yield Chem.MolToSmiles(salt_mol, canonical=True)
+                    
+        # If fragment is an ANION (-1), pair it 1:1 with database CATIONS (+1)
+        elif "-" in frag_smi and "+" not in frag_smi:
+            for cation in CATIONS:
+                salt_smi = f"{frag_smi}.{cation}"
+                salt_mol = Chem.MolFromSmiles(salt_smi)
+                if salt_mol:
+                    yield Chem.MolToSmiles(salt_mol, canonical=True)
+
+def action_alcohol_to_ether(mol):
+    """Converts -OH to -OCH3 (e.g., CCO -> CCOC)."""
+    rxn = rdChemReactions.ReactionFromSmarts('[OH:1] >> [OCH3:1]')
+    for prod_tuple in rxn.RunReactants((mol,)):
+        for prod in prod_tuple:
+            try:
+                Chem.SanitizeMol(prod)
+                yield Chem.MolToSmiles(prod, canonical=True)
+            except Exception:
+                continue
+
+def action_hydroxyl_to_halogen(mol):
+    """Replaces -OH with -Cl or -Br (e.g., CCO -> CCCl, CCBr)."""
+    rules = ['[OH:1] >> [Cl:1]', '[OH:1] >> [Br:1]']
+    for smarts in rules:
+        rxn = rdChemReactions.ReactionFromSmarts(smarts)
+        for prod_tuple in rxn.RunReactants((mol,)):
+            for prod in prod_tuple:
+                try:
+                    Chem.SanitizeMol(prod)
+                    yield Chem.MolToSmiles(prod, canonical=True)
+                except Exception:
+                    continue
+
+def action_chain_branching(mol):
+    """Converts linear methylene into isopropyl branching: -CH2- -> -CH(CH3)-"""
+    rxn = rdChemReactions.ReactionFromSmarts('[C;H2:1] >> [CH:1](C)C')
+    for prod_tuple in rxn.RunReactants((mol,)):
+        for prod in prod_tuple:
+            try:
+                Chem.SanitizeMol(prod)
+                yield Chem.MolToSmiles(prod, canonical=True)
+            except Exception:
+                continue
+
+# =====================================================================
+# DEFAULT FACTORY FUNCTION
+# =====================================================================
+
+def create_smart_mutator():
+    """Builds and registers standard action set."""
+    engine = SmartActionMutator()
+    
+    engine.register_action("halogen_swap", action_halogen_swap)
+    engine.register_action("alkyl_extension", action_alkyl_extension)
+    engine.register_action("counterion_swap", action_counterion_swap)
+    engine.register_action("alcohol_to_ether", action_alcohol_to_ether)
+    engine.register_action("hydroxyl_to_halogen", action_hydroxyl_to_halogen)
+    engine.register_action("chain_branching", action_chain_branching)
+
+    return engine
