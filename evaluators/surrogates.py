@@ -46,6 +46,7 @@ class HarvestedContextEvaluator:
 
         # 3. Fit Model
         print(f"\nFitting Surrogate Model on {len(X_train)} harvested neighbors...")
+        print(X_train)
         self.model.fit(X_train, Y_train)
 
         # 4. Predict at Target

@@ -3,7 +3,7 @@
 from data_processing.harvesting import TargetHarvestingEngine
 from encoders.chemicals import hybrid_physicochemical_encoder, standard_molecular_features
 from adapters.databases import caleb_bell_db_adapter
-from mutators.combinatorial import mutator, create_smart_mutator
+from mutators.combinatorial import mutator, create_smart_mutator, selfies_mutator
 from metrics.chemicals_differences import tanimoto_distance
 from models.gp import StandardGP
 from evaluators.surrogates import HarvestedContextEvaluator
@@ -54,50 +54,65 @@ from tabulate import tabulate
 # print(f" Actual Database Value   : {data['Melting Point']:.2f}")
 # print("="*50 + "\n")
 
-TARGET_POOL = [
-    # ------------------------------------------------------------------
-    # 1. Simple Alcohols (Small & Linear Organics)
-    # ------------------------------------------------------------------
-    "CO",                             # Methanol (175.47 K)
-    "CCO",                            # Ethanol (159.05 K)
-    "CCCO",                           # 1-Propanol (146.95 K)
-    "CCCCO",                          # 1-Butanol (183.85 K)
-    "CC(O)C",                         # Isopropanol (185.25 K)
+# TARGET_POOL = [
+#     # ------------------------------------------------------------------
+#     # 1. Simple Alcohols (Small & Linear Organics)
+#     # ------------------------------------------------------------------
+#     "CO",                             # Methanol (175.47 K)
+#     "CCO",                            # Ethanol (159.05 K)
+#     "CCCO",                           # 1-Propanol (146.95 K)
+#     "CCCCO",                          # 1-Butanol (183.85 K)
+#     "CC(O)C",                         # Isopropanol (185.25 K)
     
-    # ------------------------------------------------------------------
-    # 2. Carboxylic Acids & Carbonyls
-    # ------------------------------------------------------------------
-    "CC(=O)O",                        # Acetic Acid (289.65 K)
-    "CCC(=O)O",                       # Propionic Acid (252.45 K)
-    "CC(=O)C",                        # Acetone (178.45 K)
-    "CCC(=O)C",                       # Methyl Ethyl Ketone / MEK (186.45 K)
+#     # ------------------------------------------------------------------
+#     # 2. Carboxylic Acids & Carbonyls
+#     # ------------------------------------------------------------------
+#     "CC(=O)O",                        # Acetic Acid (289.65 K)
+#     "CCC(=O)O",                       # Propionic Acid (252.45 K)
+#     "CC(=O)C",                        # Acetone (178.45 K)
+#     "CCC(=O)C",                       # Methyl Ethyl Ketone / MEK (186.45 K)
 
-    # ------------------------------------------------------------------
-    # 3. Simple Aromatics (Halogen & Alkyl Swaps)
-    # ------------------------------------------------------------------
-    "c1ccccc1",                       # Benzene (278.68 K)
-    "Cc1ccccc1",                      # Toluene (178.15 K)
-    "Fc1ccccc1",                      # Fluorobenzene (230.94 K)
-    "Clc1ccccc1",                     # Chlorobenzene (227.95 K)
-    "Brc1ccccc1",                     # Bromobenzene (242.43 K)
-    "Ic1ccccc1",                      # Iodobenzene (241.80 K)
+#     # ------------------------------------------------------------------
+#     # 3. Simple Aromatics (Halogen & Alkyl Swaps)
+#     # ------------------------------------------------------------------
+#     "c1ccccc1",                       # Benzene (278.68 K)
+#     "Cc1ccccc1",                      # Toluene (178.15 K)
+#     "Fc1ccccc1",                      # Fluorobenzene (230.94 K)
+#     "Clc1ccccc1",                     # Chlorobenzene (227.95 K)
+#     "Brc1ccccc1",                     # Bromobenzene (242.43 K)
+#     "Ic1ccccc1",                      # Iodobenzene (241.80 K)
 
-    # ------------------------------------------------------------------
-    # 4. Short-Chain Haloalkanes
-    # ------------------------------------------------------------------
-    "CCCl",                           # Chloroethane (134.45 K)
-    "CCBr",                           # Bromoethane (154.55 K)
-    "CCCCl",                          # 1-Chloropropane (150.35 K)
+#     # ------------------------------------------------------------------
+#     # 4. Short-Chain Haloalkanes
+#     # ------------------------------------------------------------------
+#     "CCCl",                           # Chloroethane (134.45 K)
+#     "CCBr",                           # Bromoethane (154.55 K)
+#     "CCCCl",                          # 1-Chloropropane (150.35 K)
 
-    # ------------------------------------------------------------------
-    # 5. Ionic Salts & Quaternary Ammonium (Counterion & Chain Swaps)
-    # ------------------------------------------------------------------
-    "C[N+](C)(C)C.[Cl-]",             # Tetramethylammonium Chloride (TMAC)
-    "CC[N+](CC)(CC)CC.[Cl-]",         # Tetraethylammonium Chloride (TEAC)
-    "CC[N+](CC)(CC)CC.[Br-]",         # Tetraethylammonium Bromide (TEABr)
-    "CCCC[N+](CCCC)(CCCC)CCCC.[Cl-]", # Tetrabutylammonium Chloride (TBAC)
-    "CCCC[N+](CCCC)(CCCC)CCCC.[Br-]", # Tetrabutylammonium Bromide (TBABr)
-    "CCCC[N+](CCCC)(CCCC)CCCC.[I-]"   # Tetrabutylammonium Iodide (TBAI)
+#     # ------------------------------------------------------------------
+#     # 5. Ionic Salts & Quaternary Ammonium (Counterion & Chain Swaps)
+#     # ------------------------------------------------------------------
+#     "C[N+](C)(C)C.[Cl-]",             # Tetramethylammonium Chloride (TMAC)
+#     "CC[N+](CC)(CC)CC.[Cl-]",         # Tetraethylammonium Chloride (TEAC)
+#     "CC[N+](CC)(CC)CC.[Br-]",         # Tetraethylammonium Bromide (TEABr)
+#     "CCCC[N+](CCCC)(CCCC)CCCC.[Cl-]", # Tetrabutylammonium Chloride (TBAC)
+#     "CCCC[N+](CCCC)(CCCC)CCCC.[Br-]", # Tetrabutylammonium Bromide (TBABr)
+#     "CCCC[N+](CCCC)(CCCC)CCCC.[I-]",  # Tetrabutylammonium Iodide (TBAI)
+TARGET_POOL = [
+    "[BH3-][NH3+]",
+    "[B-][NH2+]C",
+    "CNC.[B]",
+    "[B][N+](C)(C)C",
+    "CCN.[B]",
+    "[BH3-][NH2+]CCC",
+    "CCCCN.[B]",
+
+    "[BH4-].[Li+]",
+    "[BH4-].[Na+]",
+
+    "C[N+](C)(C)C.[BH4-]",
+    "CC[N+](CC)(CC)CC.[BH4-]",
+    "CCCC[N+](CCCC)(CCCC)CCCC.[BH4-]"
 ]
 
 requested_properties = ["Melting Point"]
@@ -123,19 +138,20 @@ for idx, target_smiles in enumerate(TARGET_POOL, 1):
     has_data, target_data = engine._check_target()
 
     if not has_data:
-        print(f" ⚠️ Skipping '{target_smiles}': Ground truth data not found in DB.")
-        continue
-
-    # Extract actual value safely
-    actual_val = target_data["Melting Point"]
+        actual_val = np.inf
+    else:
+        # Extract actual value safely
+        actual_val = target_data["Melting Point"]
 
     harvested_neighbors = engine._harvest_neighbors(
-        mutator_fn=lambda smi: smart_mutator.mutate(smi),
+        mutator_fn=lambda smi: smart_mutator.mutate_until_k(smi),
+        # mutator_fn=selfies_mutator,
         distance_metric_fn=tanimoto_distance,
-        k_neighbors=10
+        k_neighbors=10,
+        max_attempts=2000
     )
 
-    smart_mutator.print_mutation_report()
+    # smart_mutator.print_mutation_report()
 
     evaluator = HarvestedContextEvaluator(surrogate_model=StandardGP())
 

@@ -2,32 +2,32 @@ import csv
 import numpy as np
 import pandas as pd
 
-from __temp__.alexChemicals import Mixture
+# from __temp__.alexChemicals import Mixture
 
-def exportSLE(filename: str, mixture: Mixture, x_matrix: np.ndarray, T_matrix: np.ndarray, T_sle: np.ndarray):
-    """
-    Dynamically generates and writes SLE phase data to a CSV file for N components.
-    """
-    # Build dynamic headers based on compound names
-    headers = []
-    for comp in mixture.compounds:
-        headers.append(f"x_{comp.name}")
+# def exportSLE(filename: str, mixture: Mixture, x_matrix: np.ndarray, T_matrix: np.ndarray, T_sle: np.ndarray):
+#     """
+#     Dynamically generates and writes SLE phase data to a CSV file for N components.
+#     """
+#     # Build dynamic headers based on compound names
+#     headers = []
+#     for comp in mixture.compounds:
+#         headers.append(f"x_{comp.name}")
         
-    for comp in mixture.compounds:
-        headers.append(f"T_{comp.name} (K)")
+#     for comp in mixture.compounds:
+#         headers.append(f"T_{comp.name} (K)")
         
-    headers.append("T_SLE (K)")
+#     headers.append("T_SLE (K)")
     
-    # Combine all arrays side-by-side into one large data matrix
-    combined_data = np.column_stack((x_matrix, T_matrix, T_sle))
+#     # Combine all arrays side-by-side into one large data matrix
+#     combined_data = np.column_stack((x_matrix, T_matrix, T_sle))
     
-    # Write data to disk
-    with open(filename, mode='w', newline='', encoding='utf-8') as f:
-        writer = csv.writer(f)
-        writer.writerow(headers)      # Write the header row
-        writer.writerows(combined_data)  # Write all data rows
+#     # Write data to disk
+#     with open(filename, mode='w', newline='', encoding='utf-8') as f:
+#         writer = csv.writer(f)
+#         writer.writerow(headers)      # Write the header row
+#         writer.writerows(combined_data)  # Write all data rows
         
-    print(f"--> Phase diagram data successfully exported to: {filename}")
+#     print(f"--> Phase diagram data successfully exported to: {filename}")
 
 def createUniqueCombos(input_file: str, output_file: str = "combinations.xlsx", num_components: int = 2):
     from rdkit import Chem
@@ -162,3 +162,22 @@ def plotScreeningResults(results_dir="screening_results",
         plt.close()
         
         print(f" -> Compiled and saved plot: {fig_path}")
+
+from rdkit import Chem
+
+def canonicalize_smiles(smiles_list):
+    canonical_smiles = []
+
+    for smiles in smiles_list:
+        # Parse the SMILES string into an RDKit Molecule object
+        mol = Chem.MolFromSmiles(smiles)
+
+        if mol is not None:
+            # Convert back to SMILES (RDKit generates canonical SMILES by default)
+            can_smiles = Chem.MolToSmiles(mol, canonical=True)
+            canonical_smiles.append(can_smiles)
+        else:
+            # Handle invalid SMILES strings
+            canonical_smiles.append(None)
+
+    return canonical_smiles

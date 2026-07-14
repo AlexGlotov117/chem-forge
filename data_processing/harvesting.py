@@ -44,7 +44,7 @@ class TargetHarvestingEngine:
             # print("Target entity lacks complete data in the database.")
             return False, None
 
-    def _harvest_neighbors(self, mutator_fn, distance_metric_fn, k_neighbors=10, max_attempts=500):
+    def _harvest_neighbors(self, mutator_fn, distance_metric_fn, k_neighbors=10, max_attempts=1000):
         """
         Dynamically generates virtual molecules around the target, checks if they
         exist in the database, and harvests the top k complete neighbors on-the-fly.

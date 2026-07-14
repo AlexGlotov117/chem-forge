@@ -17,6 +17,23 @@ COMMON_DATABASE_ANIONS = [
     "[NO3-]",          # Nitrate
 ]
 
+import selfies as sf
+import random
+
+def selfies_mutator(smiles, num_mutations = 3):
+    """Generates a valid mutant without any hardcoded SMARTS rules."""
+    selfies_str = sf.encoder(smiles)
+    tokens = list(sf.split_selfies(selfies_str))
+    
+    # Perform random mutation (replacement/insertion/deletion)
+    alphabet = list(sf.get_semantic_robust_alphabet())
+    for _ in range(num_mutations):
+        idx = random.randint(0, len(tokens) - 1)
+        tokens[idx] = random.choice(alphabet)
+        
+    mutated_selfies = "".join(tokens)
+    return sf.decoder(mutated_selfies)
+
 def mutator(target_smiles, num_mutations_per_target=100):
     # try:
     #     # 1. Convert SMILES to SELFIES
@@ -159,7 +176,6 @@ class SmartActionMutator:
     def mutate(self, target_smiles, depth=3, active_actions=None):
         """
         Mutates target SMILES up to `depth` steps.
-        If depth=2, it mutates the generated candidates to find further neighbors.
         """
         self.clear_history()
         
@@ -199,6 +215,51 @@ class SmartActionMutator:
 
             current_frontier = next_frontier
 
+    def mutate_until_k(self, target_smiles: str, k_neighbors: int = 10, max_depth: int = 10):
+        """
+        Iteratively increases mutation depth (d = 1, 2, 3...) until
+        at least k_neighbors unique valid candidate SMILES are generated.
+        """
+        from collections import deque
+        visited = {target_smiles}
+        candidates = []
+        
+        # Queue stores tuples of (smiles, current_depth)
+        queue = deque([(target_smiles, 0)])
+
+        while queue and len(candidates) < k_neighbors:
+            current_smi, current_depth = queue.popleft()
+
+            # If we've reached max depth limit and already have candidates, stop
+            if current_depth >= max_depth:
+                break
+
+            mol = Chem.MolFromSmiles(current_smi)
+            if mol is None:
+                continue
+
+            # Run all registered mutation actions at the current depth level
+            for action_name, action_fn in self._actions.items():
+                for mutant_smi in action_fn(mol):
+                    if mutant_smi not in visited:
+                        visited.add(mutant_smi)
+                        candidates.append(mutant_smi)
+                        
+                        # Queue the new mutant for the next depth layer (complexity increase)
+                        queue.append((mutant_smi, current_depth + 1))
+                        
+                        self.history.append({
+                            "action": f"{action_name} (depth {current_depth + 1})",
+                            "candidate": mutant_smi,
+                            "status": "GENERATED"
+                        })
+
+                        # Early exit if we reached target neighbor count
+                        if len(candidates) >= k_neighbors:
+                            return candidates
+
+        return candidates
+    
     def print_mutation_report(self):
         """Prints a clean summary table of all tried mutations."""
         print("\n" + "="*70)
@@ -311,6 +372,67 @@ def action_chain_branching(mol):
             except Exception:
                 continue
 
+def action_n_alkylation(mol):
+    """
+    Action: Adds methyl groups to Nitrogen atoms bound to Boron or Hydrogen.
+    Matches: [NH3+], [NH2+], [NH+], or neutral amines.
+    """
+    rules = [
+        '[N;H3:1] >> [N:1]C',
+        '[N;H2:1] >> [N:1]C',
+        '[N;H1:1] >> [N:1]C'
+    ]
+    for smarts in rules:
+        rxn = rdChemReactions.ReactionFromSmarts(smarts)
+        for prod_tuple in rxn.RunReactants((mol,)):
+            for prod in prod_tuple:
+                try:
+                    Chem.SanitizeMol(prod)
+                    yield Chem.MolToSmiles(prod, canonical=True)
+                except Exception:
+                    continue
+
+
+def action_boron_halogenation(mol):
+    """
+    Action: Replaces H on Boron with Halogens (F, Cl).
+    Converts [BH3-] -> [BH2-](F), [BH2-](Cl), etc.
+    """
+    rules = [
+        '[B;H3:1] >> [B:1]F', '[B;H3:1] >> [B:1]Cl',
+        '[B;H2:1] >> [B:1]F', '[B;H2:1] >> [B:1]Cl',
+        '[B;H1:1] >> [B:1]F', '[B;H1:1] >> [B:1]Cl'
+    ]
+    for smarts in rules:
+        rxn = rdChemReactions.ReactionFromSmarts(smarts)
+        for prod_tuple in rxn.RunReactants((mol,)):
+            for prod in prod_tuple:
+                try:
+                    Chem.SanitizeMol(prod)
+                    yield Chem.MolToSmiles(prod, canonical=True)
+                except Exception:
+                    continue
+
+
+def action_b_alkylation(mol):
+    """
+    Action: Replaces H on Boron with Methyl groups.
+    Converts [BH3-] -> [BH2-](C).
+    """
+    rules = [
+        '[B;H3:1] >> [B:1]C',
+        '[B;H2:1] >> [B:1]C'
+    ]
+    for smarts in rules:
+        rxn = rdChemReactions.ReactionFromSmarts(smarts)
+        for prod_tuple in rxn.RunReactants((mol,)):
+            for prod in prod_tuple:
+                try:
+                    Chem.SanitizeMol(prod)
+                    yield Chem.MolToSmiles(prod, canonical=True)
+                except Exception:
+                    continue
+
 # =====================================================================
 # DEFAULT FACTORY FUNCTION
 # =====================================================================
@@ -325,5 +447,8 @@ def create_smart_mutator():
     engine.register_action("alcohol_to_ether", action_alcohol_to_ether)
     engine.register_action("hydroxyl_to_halogen", action_hydroxyl_to_halogen)
     engine.register_action("chain_branching", action_chain_branching)
+    engine.register_action("n_alkylation", action_n_alkylation)
+    engine.register_action("boron_halogenation", action_boron_halogenation)
+    engine.register_action("b_alkylation", action_b_alkylation)
 
     return engine
