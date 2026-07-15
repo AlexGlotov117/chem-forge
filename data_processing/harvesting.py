@@ -7,7 +7,7 @@ class TargetHarvestingEngine:
     Harvesting & ranking the top-k nearest complete neighbors from a pool of virtual entities.
     """
 
-    def __init__(self, target_smiles, requested_properties, featurizer_fn, db_query_fn):
+    def __init__(self, target_smiles, requested_properties, featurizer_fn, adapter):
         """
         Parameters:
         -----------
@@ -24,84 +24,149 @@ class TargetHarvestingEngine:
         self.target_smiles = target_smiles
         self.requested_properties = requested_properties
         self.featurizer_fn = featurizer_fn
-        self.db_query_fn = db_query_fn
+        self.adapter = adapter
 
         # Extract features for target once
         self.x_target = np.array(self.featurizer_fn(self.target_smiles)).flatten()
 
-    def _check_target(self):
+    # COME BACK TO THIS AND FIX
+    def check_target(self):
         """
         Query the database interface for direct ground-truth data.
         Returns: (has_complete_data: bool, data: dict or None)
         """
         # print("Checking database interface for target entity...")
-        data = self.db_query_fn(self.target_smiles, self.requested_properties)
+        data = self.adapter.query_target(self.target_smiles, self.requested_properties)
+        
+        return True, data
 
-        if data is not None:
-            # print("Target entity has complete empirical data in the database!")
-            return True, data
-        else:
-            # print("Target entity lacks complete data in the database.")
-            return False, None
-
-    def _harvest_neighbors(self, mutator_fn, distance_metric_fn, k_neighbors=10, max_attempts=1000):
+    def harvest_neighbors(self, distance_metric_fn, strategy='full', k_neighbors=1, max_attempts=1000):
         """
-        Dynamically generates virtual molecules around the target, checks if they
-        exist in the database, and harvests the top k complete neighbors on-the-fly.
-
-        Parameters:
+        Generically harvests neighbors and includes the target molecule itself 
+        if it exists in the selected search space.
+        
+        Strategies:
         -----------
-        mutator_fn : callable
-            A generator or function yielding virtual mutated candidates: mutator_fn(target_smiles) -> candidate.
-        distance_metric_fn : callable
-            A function: (1D array x_target, 1D array x_candidate) -> scalar distance.
-        k_neighbors : int
-            Target number of valid database neighbors to harvest.
-        max_attempts : int
-            Safety cutoff for the generation loop.
+        'mutation'     : Uses adapter's mutation generator to pull targeted values on-the-fly.
+        'full'         : Pulls the entire database from the adapter and evaluates all entries.
+        'full_cropped' : Pulls the entire database but pre-filters/crops to candidate SMILES first.
         """
-        print(f"\nDynamic Generation Triggered: Harvesting {k_neighbors} database neighbors...")
+        import pandas as pd
+        
         harvested_neighbors = []
-        visited = {self.target_smiles}
 
-        attempts = 0
-        for candidate in mutator_fn(self.target_smiles):
-            attempts += 1
+        # ==========================================
+        # STRATEGY 1: Dynamic Mutation Search
+        # ==========================================
+        if strategy == 'mutation':
+            print(f"Harvesting via Dynamic Mutation (k={k_neighbors})...")
+            
+            visited = set()
+            attempts = 0
+            
+            # Request mutation stream from the adapter
+            mutation_generator = self.adapter.generate_mutated_candidates(self.target_smiles)
+            if not mutation_generator:
+                print("Adapter does not support mutations.")
+                return []
 
-            if attempts > max_attempts:
-                print(f"Reached max generation attempts ({max_attempts}).")
-                break
+            for candidate in mutation_generator:
+                attempts += 1
+                if attempts > max_attempts or len(harvested_neighbors) >= k_neighbors:
+                    break
 
-            # Avoid re-evaluating duplicate mutations or the target itself
-            if candidate in visited:
-                continue
-            visited.add(candidate)
+                if candidate in visited:
+                    continue
+                visited.add(candidate)
 
-            # Query database for empirical hit on the virtual candidate
-            cand_data = self.db_query_fn(candidate, self.requested_properties)
-            if cand_data is None:
-                continue  # Virtual molecule does not exist in the database or lacks data
+                # Direct point-query on the candidate
+                cand_data = self.adapter.query_target(candidate, self.requested_properties)
+                if cand_data is None:
+                    continue
 
-            # Compute features & distance relative to target
-            cand_features = np.array(self.featurizer_fn(candidate)).flatten()
-            dist = distance_metric_fn(self.x_target, cand_features)
+                cand_features = np.array(self.featurizer_fn(candidate)).flatten()
+                dist = distance_metric_fn(self.x_target, cand_features)
 
-            harvested_neighbors.append({
-                "entity": candidate,
-                "features": cand_features,
-                "properties": cand_data,
-                "distance": dist
-            })
+                harvested_neighbors.append({
+                    "entity": candidate,
+                    "features": cand_features,
+                    "properties": cand_data,
+                    "distance": dist
+                })
 
-            # print(f"Found Valid Neighbor #{len(harvested_neighbors)}: {candidate} | Distance: {dist:.4f}")
+        # ==========================================
+        # STRATEGY 2 & 3: Global Database / Cropped
+        # ==========================================
+        elif strategy in ('full', 'full_cropped'):
+            print(f"Harvesting via Global Database Scan (Strategy: '{strategy}', k={k_neighbors})...")
+            
+            # Request the full database dump from the adapter
+            all_records = self.adapter.get_full_database()
+            
+            # -----------------------------------------------------------------
+            # FALLBACK: Adapter does not support full dumps (e.g. Caleb Bell)
+            # -----------------------------------------------------------------
+            if all_records is None:
+                print("Adapter does not support global database dumps. Checking for target direct hit...")
+                
+                # Check if we can at least get the target itself
+                target_has_data, target_data = self.check_target()
+                if target_has_data:
+                    print("Found direct target data! Returning single target record.")
+                    return [{
+                        "entity": self.target_smiles,
+                        "features": self.x_target,
+                        "properties": target_data,
+                        "distance": 0.0
+                    }]
+                else:
+                    # Return empty list cleanly instead of raising an error!
+                    print("Target not found and global scan unsupported. Returning empty neighbor set.")
+                    return []
+            # -----------------------------------------------------------------
 
-            if len(harvested_neighbors) >= k_neighbors:
-                break
+            candidates_pool = all_records.items()
 
-        if not harvested_neighbors:
-            print("Generator could not find any database-verified neighbors.")
-            return []
+            pool_with_distances = []
+            for candidate, cand_data in candidates_pool:
+                try:
+                    cand_features = np.array(self.featurizer_fn(candidate)).flatten()
+                    dist = distance_metric_fn(self.x_target, cand_features)
+                    pool_with_distances.append((candidate, cand_data, dist, cand_features))
+                except Exception:
+                    continue
 
-        # Sort closest first
+            pool_with_distances.sort(key=lambda x: x[2])
+
+            harvested_neighbors = []
+            for candidate, cand_data, dist, cand_features in pool_with_distances:
+                # ONLY stop early at k if we are using the cropped strategy
+                if strategy == 'full_cropped' and len(harvested_neighbors) >= k_neighbors:
+                    break
+
+                # Extract and pad properties
+                filtered_properties = {
+                    prop: cand_data.get(prop, np.nan) 
+                    for prop in self.requested_properties
+                }
+
+                # Skip only if the candidate has absolutely none of the properties we want
+                if all(pd.isna(val) for val in filtered_properties.values()):
+                    continue
+
+                harvested_neighbors.append({
+                    "entity": candidate,
+                    "features": cand_features,
+                    "properties": filtered_properties,
+                    "distance": dist
+                })
+
+            return harvested_neighbors
+
+        else:
+            raise ValueError(f"Unknown harvesting strategy: {strategy}")
+
+        # Sort all discovered entries globally. 
+        # If the target molecule was evaluated, its distance will be 0.0 and it will sort to index 0!
         harvested_neighbors.sort(key=lambda item: item["distance"])
-        return harvested_neighbors
+        return harvested_neighbors[:k_neighbors]
