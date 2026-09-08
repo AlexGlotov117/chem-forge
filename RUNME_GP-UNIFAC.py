@@ -2,7 +2,7 @@ import gpytorch
 import torch
 
 
-# 1. Define a pure Multi-Task GP for 1 binary system (Input: x1, Outputs: [g^E/RT, h^E/RT])
+# Define a pure Multi-Task GP for 1 binary system (Input: x1, Outputs: [g^E/RT, h^E/RT])
 class PureBinaryThermodynamicGP(gpytorch.models.ExactGP):
 
   def __init__(self, train_x, train_y, likelihood):
@@ -30,8 +30,8 @@ y_train = torch.cat(
 )
 
 # --- INITIALIZE ---
-likelihood = gpytorch.likelihoods.MultitaskLikelihood(
-    num_tasks=2, likelihood=gpytorch.likelihoods.GaussianLikelihood()
+likelihood = gpytorch.likelihoods.MultitaskGaussianLikelihood(
+    num_tasks=2
 )
 model = PureBinaryThermodynamicGP(x_train, y_train, likelihood)
 
@@ -81,3 +81,21 @@ print(f"Predicted h^E/RT: {mean_pred[:, 1:2].item():.4f}")
 print(
     f"Exact Analytical Derivative (dg^E/dx1 from GP): {dgE_dx.item():.4f}"
 )  # <--- This is your thermodynamic link!
+
+x1 = x_query
+x2 = 1.0 - x1
+
+# Isolate predictions
+gE_RT_val = gE_RT_pred  # From Task 0 output
+dgE_dx1 = dgE_dx  # From torch.autograd.grad
+
+# Calculate natural logarithm of activity coefficients
+ln_gamma1 = gE_RT_val + x2 * dgE_dx1
+ln_gamma2 = gE_RT_val - x1 * dgE_dx1
+
+# Convert to standard activity coefficients (gamma)
+gamma1 = torch.exp(ln_gamma1)
+gamma2 = torch.exp(ln_gamma2)
+
+print(f"Activity Coefficient (gamma_1): {gamma1.item():.4f}")
+print(f"Activity Coefficient (gamma_2): {gamma2.item():.4f}")
