@@ -14,6 +14,9 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from sklearn.feature_selection import VarianceThreshold
 
+from sklearn.linear_model import LassoCV
+from sklearn.preprocessing import StandardScaler
+
 # Suppress convergence warnings for the sake of clean output during small-sample testing
 warnings.filterwarnings("ignore")
 
@@ -249,6 +252,125 @@ def apply_tier1_unsupervised_filter(
         
     return df_filtered
 
+def apply_tier2_supervised_filter(
+    X_train_filtered_df, 
+    Y_train, 
+    target_names=['T_m', 'dH_fus', 'dH_f'],
+    max_features=6, 
+    show_plots=True
+):
+    """
+    Tier 2 Supervised Feature Selection using LOOCV-LASSO Stability Scoring.
+    
+    Parameters:
+    -----------
+    X_train_filtered_df : pd.DataFrame
+        DataFrame of features retained after Tier 1 (N_samples x P_tier1)
+    Y_train : np.ndarray
+        Target array of shape (N_samples, 3)
+    target_names : list of str
+        Labels for the target properties
+    max_features : int
+        Target number of physical features for GP (default: 6, recommended: 5-8)
+    show_plots : bool
+        If True, displays selection frequency bar charts across target tasks
+        
+    Returns:
+    --------
+    X_tier2_df : pd.DataFrame
+        The final DataFrame sliced down to the top max_features physical drivers
+    selected_feature_names : list of str
+        Names of the retained physical descriptors
+    """
+    N, P = X_train_filtered_df.shape
+    feature_names = X_train_filtered_df.columns.tolist()
+    
+    print(f"\n================ TIER 2 SUPERVISED FILTER ================")
+    print(f"Input Candidate Pool: {P} features | Target Matrix: {Y_train.shape}")
+    print(f"Selection Strategy: LOOCV-LASSO Stability (Target Core Size: {max_features})")
+    
+    # 1. Standardize Features and Targets for LASSO regularization equality
+    scaler_X = StandardScaler()
+    X_scaled = scaler_X.fit_transform(X_train_filtered_df.values)
+    
+    scaler_Y = StandardScaler()
+    Y_scaled = scaler_Y.fit_transform(Y_train)
+    
+    # Track feature selection counts across targets and LOOCV folds
+    feature_scores = {feat: 0.0 for feat in feature_names}
+    task_feature_scores = {task: {feat: 0 for feat in feature_names} for task in target_names}
+    
+    # 2. Iterate over each target task (MTGP multivariable driver selection)
+    for task_idx, task_name in enumerate(target_names):
+        y_task = Y_scaled[:, task_idx]
+        
+        # Leave-One-Out Cross-Validation Loop
+        for i in range(N):
+            # Split LOOCV
+            mask = np.ones(N, dtype=bool)
+            mask[i] = False
+            
+            X_tr, y_tr = X_scaled[mask], y_task[mask]
+            
+            # Fit LassoCV with automatic alpha search
+            lasso = LassoCV(cv=5, max_iter=10000, random_state=42)
+            lasso.fit(X_tr, y_tr)
+            
+            # Identify non-zero coefficients
+            non_zero_indices = np.where(np.abs(lasso.coef_) > 1e-5)[0]
+            
+            for idx in non_zero_indices:
+                feat = feature_names[idx]
+                feature_scores[feat] += np.abs(lasso.coef_[idx])
+                task_feature_scores[task_name][feat] += 1
+
+    # 3. Sort features by aggregate stability & weight score
+    sorted_features = sorted(feature_scores.items(), key=lambda x: x[1], reverse=True)
+    selected_feature_names = [feat for feat, score in sorted_features[:max_features]]
+    
+    print(f"\nTop {max_features} Selected Physical Descriptors:")
+    for rank, (feat, score) in enumerate(sorted_features[:max_features], 1):
+        print(f"  {rank}. {feat:<30} (Cumulative Score: {score:.3f})")
+    print(f"==========================================================\n")
+    
+    # 4. Slice Tier 1 DataFrame down to Tier 2
+    X_tier2_df = X_train_filtered_df[selected_feature_names].copy()
+    
+    # 5. Diagnostic Visualization
+    if show_plots:
+        fig, ax = plt.subplots(figsize=(10, 5))
+        
+        # Prepare data for top 12 candidate features comparison
+        top_candidates = [feat for feat, _ in sorted_features[:min(12, P)]]
+        df_plot = pd.DataFrame([
+            {
+                'Feature': feat,
+                'Task': task,
+                'Selection_Count': task_feature_scores[task][feat]
+            }
+            for feat in top_candidates
+            for task in target_names
+        ])
+        
+        sns.barplot(
+            data=df_plot, 
+            x='Selection_Count', 
+            y='Feature', 
+            hue='Task', 
+            ax=ax, 
+            palette='viridis'
+        )
+        
+        # Draw threshold line for selected features
+        ax.axhline(y=max_features - 0.5, color='red', linestyle='--', label=f'Cutoff (Top {max_features})')
+        ax.set_title(f"Tier 2 Feature Selection Stability Across Tasks (LOOCV-LASSO)", fontsize=12, fontweight='bold')
+        ax.set_xlabel("Selection Frequency Across LOOCV Folds")
+        ax.legend(loc='lower right')
+        plt.tight_layout()
+        plt.show()
+        
+    return X_tier2_df, selected_feature_names
+
 if __name__ == "__main__":
     print("=== Precursor GP Pipeline ===")
 
@@ -258,25 +380,33 @@ if __name__ == "__main__":
     # X_train, Y_train = generate_mock_data(n_samples=40, n_features=1500)
     smiles_train, Y_train = extract_smiles_and_targets(TRAIN_FILE_PATH)
     smiles_test, Y_test = extract_smiles_and_targets(TEST_FILE_PATH)
-        
+    Y_train[:,0] = Y_train[:,1] / Y_train[:,0]
+    Y_test[:,0] = Y_test[:,1] / Y_test[:,0]
+    
     print(f"Featurizing {len(smiles_train)} SMILES strings via RDKit...")
     X_train, X_train_names = featurize_smiles(smiles_train)
     X_test, X_test_names = featurize_smiles(smiles_test)
 
-    X_train_filtered = apply_tier1_unsupervised_filter(X_train, X_train_names, show_plots=False)
-    retained_features = X_train_filtered.columns.tolist()
+    X_train_tier1 = apply_tier1_unsupervised_filter(X_train, X_train_names, show_plots=False)
+
+    X_train_tier2, final_features = apply_tier2_supervised_filter(
+        X_train_tier1, 
+        Y_train, 
+        max_features=6, 
+        show_plots=True
+    )
 
     # Convert test data to DataFrame and slice using the SAME retained feature list
     X_test_df = pd.DataFrame(X_test, columns=X_test_names)
-    X_test_filtered = X_test_df[retained_features]
+    X_test_filtered = X_test_df[final_features]
 
     print(
-        f"Train Matrix Shape: {X_train_filtered.shape}"
+        f"Train Matrix Shape: {X_train_tier2.shape}"
     )  # (N_train, 49)
     print(f"Test Matrix Shape:  {X_test_filtered.shape}")  # (N_test, 49)
 
     gp_framework = MTGPR()
-    gp_framework.fit(X_train_filtered.values, Y_train)
+    gp_framework.fit(X_train_tier2.values, Y_train)
     
     print("\n=== Evaluating Candidate Precursors ===")
     predictions = gp_framework.predict(X_test_filtered.values)
@@ -285,9 +415,14 @@ if __name__ == "__main__":
     for i in range(len(X_test_filtered.values)):
         print(f"\nCandidate {i+1}: {smiles_test[i]}")
         for prop in ['T_m', 'dH_fus', 'dH_f']:
-            pred = predictions[prop]['prediction'][i]
-            uncert = predictions[prop]['uncertainty'][i]
-            flag = predictions[prop]['high_risk_flag'][i]
+            if prop == 'T_m':
+                pred = predictions['dH_fus']['prediction'][i]/predictions[prop]['prediction'][i]
+                uncert = predictions[prop]['uncertainty'][i]
+                flag = predictions[prop]['high_risk_flag'][i]
+            else:
+                pred = predictions[prop]['prediction'][i]
+                uncert = predictions[prop]['uncertainty'][i]
+                flag = predictions[prop]['high_risk_flag'][i]
             
             flag_str = "[WARNING: EXTRAPOLATION]" if flag else "[RELIABLE]"
             print(f"  {prop:6s}: {pred:7.2f} ± {uncert:6.2f} {flag_str}")
