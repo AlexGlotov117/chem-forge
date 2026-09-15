@@ -35,13 +35,14 @@ class MTGPR:
     Gaussian Process architecture tailored for small datasets (N <= 50) of energetic precursors.
     Implements dimensionality reduction (PCA) and a Rational Quadratic kernel to prevent overfitting.
     """
-    def __init__(self, variance_retained=0.95, max_components=5):
-        self.variance_retained = variance_retained
-        self.max_components = max_components
+    def __init__(self):
+        # self.variance_retained = variance_retained
+        # self.max_components = max_components
         
-        # Preprocessing pipeline
-        self.scaler = MinMaxScaler()
-        self.pca = PCA(n_components=self.variance_retained)
+        # # Preprocessing pipeline
+        # self.scaler = MinMaxScaler()
+        # self.pca = PCA(n_components=self.variance_retained)
+        self.scaler = StandardScaler()
         
         # 
         self.model = None
@@ -83,17 +84,17 @@ class MTGPR:
         N, D = X.shape
         print(f"Training on dataset size N={N}, Original Features D={D}")
         
-        # 1. Feature Compression Pipeline (Section 2.2.2 Step 1)
+        # # 1. Feature Compression Pipeline (Section 2.2.2 Step 1)
         X_scaled = self.scaler.fit_transform(X)
-        X_pca = self.pca.fit_transform(X_scaled)
+        # X_pca = self.pca.fit_transform(X_scaled)
         
-        # Enforce max components to maintain N / d_eff >= 10 heuristically
-        if X_pca.shape[1] > self.max_components:
-            print(f"Capping PCA components at {self.max_components} to prevent overfitting.")
-            X_pca = X_pca[:, :self.max_components]
-            self.pca.components_ = self.pca.components_[:self.max_components, :]
+        # # Enforce max components to maintain N / d_eff >= 10 heuristically
+        # if X_pca.shape[1] > self.max_components:
+        #     print(f"Capping PCA components at {self.max_components} to prevent overfitting.")
+        #     X_pca = X_pca[:, :self.max_components]
+        #     self.pca.components_ = self.pca.components_[:self.max_components, :]
             
-        print(f"Compressed feature space: d_eff = {X_pca.shape[1]}")
+        # print(f"Compressed feature space: d_eff = {X_pca.shape[1]}")
 
         # 2. Kernel Formulation (Section 2.2.2 Step 2)
         # Matern added for physical function modeling, WhiteKernel justified by 2401.17898v2.pdf for independent noise
@@ -118,10 +119,10 @@ class MTGPR:
             random_state=42
         )
         
-        self.model.fit(X_pca, Y_transformed)
+        self.model.fit(X_scaled, Y_transformed)
         
         # Store the training predictive variance for extrapolation flagging
-        _, train_std = self.model.predict(X_pca, return_std=True)
+        _, train_std = self.model.predict(X_scaled, return_std=True)
         
         # sklearn's multi-output return_std is typically 1D (shared variance in normalized space) 
         # or 2D depending on the internal scaling. We handle both cleanly.
@@ -138,14 +139,14 @@ class MTGPR:
         """
         # Compress new features
         X_scaled = self.scaler.transform(X_new)
-        X_pca = self.pca.transform(X_scaled)
-        if X_pca.shape[1] > self.max_components:
-            X_pca = X_pca[:, :self.max_components]
+        # X_pca = self.pca.transform(X_scaled)
+        # if X_pca.shape[1] > self.max_components:
+        #     X_pca = X_pca[:, :self.max_components]
 
         results = {}
         
         # Predict all properties simultaneously in transformed space
-        mu_z_all, std_z_all = self.model.predict(X_pca, return_std=True)
+        mu_z_all, std_z_all = self.model.predict(X_scaled, return_std=True)
         
         for i, prop in enumerate(self.target_names):
             # Extract predictions for the specific task
