@@ -1,6 +1,6 @@
 # To setup conda use: eval "$(/home/aglotov/miniconda3/bin/conda shell.bash hook)"
 # Use CEARun
-from models.gp import MTGPR
+from models.gp import MTGPPipeline
 
 import numpy as np
 import pandas as pd
@@ -20,7 +20,193 @@ from sklearn.preprocessing import StandardScaler
 # Suppress convergence warnings for the sake of clean output during small-sample testing
 warnings.filterwarnings("ignore")
 
-RDKIT_AVAILABLE = True
+MONOATOMIC_ION_PROPERTIES = {
+    # Cations
+    "[Li+]": {
+        "MolWt": 6.94,
+        "IonRadius": 0.76,
+        "Electronegativity": 0.98,
+        "ValenceElectrons": 2.0,
+    },
+    "[Na+]": {
+        "MolWt": 22.99,
+        "IonRadius": 1.02,
+        "Electronegativity": 0.93,
+        "ValenceElectrons": 8.0,
+    },
+    "[K+]": {
+        "MolWt": 39.10,
+        "IonRadius": 1.38,
+        "Electronegativity": 0.82,
+        "ValenceElectrons": 8.0,
+    },
+    # Anions
+    "[Cl-]": {
+        "MolWt": 35.45,
+        "IonRadius": 1.81,
+        "Electronegativity": 3.16,
+        "ValenceElectrons": 8.0,
+    },
+    "[Br-]": {
+        "MolWt": 79.90,
+        "IonRadius": 1.96,
+        "Electronegativity": 2.96,
+        "ValenceElectrons": 8.0,
+    },
+    "[I-]": {
+        "MolWt": 126.90,
+        "IonRadius": 2.20,
+        "Electronegativity": 2.66,
+        "ValenceElectrons": 8.0,
+    },
+}
+
+def get_rdkit_descriptors_with_names(mol, prefix=""):
+    """Calculates RDKit 2D descriptors and returns a dictionary with prefixed
+
+    names.
+    """
+    desc_dict = {}
+    is_none = mol is None
+
+    for name, func in Descriptors._descList:
+        col_name = f"{prefix}_{name}" if prefix else name
+        if is_none:
+            desc_dict[col_name] = 0.0
+        else:
+            try:
+                val = func(mol)
+                desc_dict[col_name] = val if np.isfinite(val) else 0.0
+            except Exception:
+                desc_dict[col_name] = 0.0
+    return desc_dict
+
+def get_morgan_fingerprint_dict(mol, radius=2, n_bits=32, prefix=""):
+    """Generates a low-dimensional Morgan Fingerprint bit vector dictionary."""
+    fp_dict = {}
+    if mol is None:
+        for i in range(n_bits):
+            fp_dict[f"{prefix}_MorganBit_{i}"] = 0.0
+        return fp_dict
+
+    # Compute ECFP4-like bit vector
+    fpgen = rdFingerprintGenerator.GetMorganGenerator(
+        radius=radius, fpSize=n_bits
+    )
+    fp = fpgen.GetFingerprint(mol)
+    for i in range(n_bits):
+        fp_dict[f"{prefix}_MorganBit_{i}"] = float(fp[i])
+
+    return fp_dict
+
+def featurize_single_compound_to_dict(smiles, fp_bits = 512):
+    """Featurizes a SMILES string into a fully labeled composite dictionary."""
+    frags = smiles.split(".")
+    mols = [
+        Chem.MolFromSmiles(f) for f in frags if Chem.MolFromSmiles(f) is not None
+    ]
+
+    cation_mol, anion_mol = None, None
+    for m in mols:
+        charge = Chem.GetFormalCharge(m)
+        if charge > 0:
+            cation_mol = m
+        elif charge < 0:
+            anion_mol = m
+
+    is_ionic = 1.0 if (cation_mol is not None or anion_mol is not None) else 0.0
+
+    # =========================================================================
+    # 1. Fragment Descriptor Blocks (RDKit 2D + Inorganic Injection)
+    # =========================================================================
+    if is_ionic == 1.0:
+        d_cation = get_rdkit_descriptors_with_names(cation_mol, prefix="Cation")
+        d_anion = get_rdkit_descriptors_with_names(anion_mol, prefix="Anion")
+        d_neutral = get_rdkit_descriptors_with_names(None, prefix="Neutral")
+
+        # Physical Properties
+        mw_cat = Descriptors.MolWt(cation_mol) if cation_mol else 0.0
+        mw_an = Descriptors.MolWt(anion_mol) if anion_mol else 0.0
+        tpsa_cat = Descriptors.TPSA(cation_mol) if cation_mol else 0.0
+        tpsa_an = Descriptors.TPSA(anion_mol) if anion_mol else 0.0
+        rot_cat = (
+            Descriptors.NumRotatableBonds(cation_mol) if cation_mol else 0
+        )
+        rot_an = Descriptors.NumRotatableBonds(anion_mol) if anion_mol else 0
+
+        # Ratios & Cross-Terms
+        mw_ratio = mw_cat / (mw_an + 1e-5)
+        tpsa_ratio = tpsa_cat / (tpsa_an + 1e-5)
+        total_rot = rot_cat + rot_an
+
+        # Substructure Fingerprints
+        fp_cation = get_morgan_fingerprint_dict(
+            cation_mol, n_bits=fp_bits, prefix="Cation"
+        )
+        fp_anion = get_morgan_fingerprint_dict(
+            anion_mol, n_bits=fp_bits, prefix="Anion"
+        )
+        fp_neutral = get_morgan_fingerprint_dict(
+            None, n_bits=fp_bits, prefix="Neutral"
+        )
+
+    else:
+        parent_mol = mols[0] if len(mols) > 0 else None
+        d_cation = get_rdkit_descriptors_with_names(None, prefix="Cation")
+        d_anion = get_rdkit_descriptors_with_names(None, prefix="Anion")
+        d_neutral = get_rdkit_descriptors_with_names(
+            parent_mol, prefix="Neutral"
+        )
+
+        mw_ratio = 0.0
+        tpsa_ratio = 0.0
+        total_rot = (
+            Descriptors.NumRotatableBonds(parent_mol) if parent_mol else 0
+        )
+
+        # Substructure Fingerprints
+        fp_cation = get_morgan_fingerprint_dict(
+            None, n_bits=fp_bits, prefix="Cation"
+        )
+        fp_anion = get_morgan_fingerprint_dict(
+            None, n_bits=fp_bits, prefix="Anion"
+        )
+        fp_neutral = get_morgan_fingerprint_dict(
+            parent_mol, n_bits=fp_bits, prefix="Neutral"
+        )
+
+    # =========================================================================
+    # 2. Global Physical Assembly Block (Lattice / Thermodynamic Drivers)
+    # =========================================================================
+    d_assembly = {
+        "Assembly_is_ionic": is_ionic,
+        "Assembly_mw_ratio": mw_ratio,
+        "Assembly_tpsa_ratio": tpsa_ratio,
+        "Assembly_total_rotatable_bonds": float(total_rot),
+        "Assembly_total_mw": (
+            (mw_cat + mw_an)
+            if is_ionic
+            else (Descriptors.MolWt(mols[0]) if mols else 0.0)
+        ),
+    }
+
+    # Merge all blocks preserving complete key alignment
+    full_dict = {
+        **d_cation,
+        **d_anion,
+        **d_neutral,
+        **d_assembly,
+        **fp_cation,
+        **fp_anion,
+        **fp_neutral,
+    }
+    return full_dict
+
+
+def build_composite_dataframe(smiles_list):
+    """Builds a fully labeled pandas DataFrame directly from SMILES."""
+    rows = [featurize_single_compound_to_dict(s) for s in smiles_list]
+    return pd.DataFrame(rows)
 
 def featurize_smiles(smiles_list, fp_size=512, radius=2):
     """
@@ -48,7 +234,7 @@ def featurize_smiles(smiles_list, fp_size=512, radius=2):
     desc_names = [f"Desc_{name}" for name, _ in Descriptors.descList]
     frag_names = [name for name, func in Fragments.__dict__.items() if name.startswith("fr_") and callable(func)]
     fp_names = [f"Morgan_Bit_{i}" for i in range(fp_size)]
-    feature_names = desc_names + frag_names
+    feature_names = desc_names + frag_names + fp_names
 
     for smi in smiles_list:
         mol = Chem.MolFromSmiles(str(smi).strip())
@@ -67,7 +253,7 @@ def featurize_smiles(smiles_list, fp_size=512, radius=2):
         fp_bits = list(fpgen.GetFingerprint(mol))
 
         # Append all numeric values for this molecule
-        features_list.append(descs + frags)
+        features_list.append(descs + frags + fp_names)
 
     # Handle missing/invalid entries
     n_features = len(feature_names)
@@ -94,7 +280,7 @@ def extract_smiles_and_targets(filepath, target_columns=None, smiles_column='SMI
         target_columns = ['T_m', 'dH_fus', 'dH_f']
         
     try:
-        df = pd.read_excel(filepath)
+        df = pd.read_excel(filepath, na_values=["—", "-", "N/A"])
     except FileNotFoundError:
         raise FileNotFoundError(f"Could not find the Excel file at '{filepath}'.")
     
@@ -111,8 +297,8 @@ def extract_smiles_and_targets(filepath, target_columns=None, smiles_column='SMI
         else:
             raise ValueError(f"Could not find SMILES column '{smiles_column}' in Excel file.")
             
-    # Drop rows missing target values or SMILES strings
-    df = df.dropna(subset=target_columns + [smiles_column])
+    # Drop rows missing  SMILES strings
+    df = df.dropna(subset=[smiles_column])
     
     smiles_data = df[smiles_column].astype(str).values
     Y = df[target_columns].values
@@ -293,8 +479,15 @@ def apply_tier2_supervised_filter(
     scaler_X = StandardScaler()
     X_scaled = scaler_X.fit_transform(X_train_filtered_df.values)
     
-    scaler_Y = StandardScaler()
-    Y_scaled = scaler_Y.fit_transform(Y_train)
+    Y_scaled = np.full_like(Y_train, fill_value=np.nan)
+    for t_idx in range(Y_train.shape[1]):
+        col_data = Y_train[:, t_idx]
+        valid_mask = ~np.isnan(col_data)
+        if np.sum(valid_mask) > 1:
+            mean = np.mean(col_data[valid_mask])
+            std = np.std(col_data[valid_mask])
+            std = 1.0 if std == 0 else std
+            Y_scaled[valid_mask, t_idx] = (col_data[valid_mask] - mean) / std
     
     # Track feature selection counts across targets and LOOCV folds
     feature_scores = {feat: 0.0 for feat in feature_names}
@@ -303,18 +496,38 @@ def apply_tier2_supervised_filter(
     # 2. Iterate over each target task (MTGP multivariable driver selection)
     for task_idx, task_name in enumerate(target_names):
         y_task = Y_scaled[:, task_idx]
+
+        valid_indices = np.where(~np.isnan(y_task))[0]
+        N_valid = len(valid_indices)
+
+        if N_valid < 5:
+            print(
+                f"Skipping Task '{task_name}': Insufficient observed samples ({N_valid})"
+            )
+            continue
+
+        X_task_valid = X_scaled[valid_indices]
+        y_task_valid = y_task[valid_indices]
         
         # Leave-One-Out Cross-Validation Loop
-        for i in range(N):
+        for i in range(N_valid):
             # Split LOOCV
-            mask = np.ones(N, dtype=bool)
+            mask = np.ones(N_valid, dtype=bool)
             mask[i] = False
             
-            X_tr, y_tr = X_scaled[mask], y_task[mask]
+            X_tr, y_tr = X_task_valid[mask], y_task_valid[mask]
             
-            # Fit LassoCV with automatic alpha search
-            lasso = LassoCV(cv=5, max_iter=10000, random_state=42)
-            lasso.fit(X_tr, y_tr)
+            cv_folds = min(5, N_valid - 2)
+            if cv_folds < 2:
+                continue
+
+            lasso = LassoCV(
+                cv=cv_folds, max_iter=10000, random_state=42, tol=1e-3
+            )
+            try:
+                lasso.fit(X_tr, y_tr)
+            except Exception:
+                continue
             
             # Identify non-zero coefficients
             non_zero_indices = np.where(np.abs(lasso.coef_) > 1e-5)[0]
@@ -326,7 +539,17 @@ def apply_tier2_supervised_filter(
 
     # 3. Sort features by aggregate stability & weight score
     sorted_features = sorted(feature_scores.items(), key=lambda x: x[1], reverse=True)
-    selected_feature_names = [feat for feat, score in sorted_features[:max_features]]
+    selected_per_task = []
+    for task_name in target_names:
+        # Rank features for THIS task only
+        task_scores = task_feature_scores[task_name]
+        top_task_feats = sorted(
+            task_scores.items(), key=lambda x: x[1], reverse=True
+        )[:2]
+        selected_per_task.extend([f[0] for f in top_task_feats])
+
+    # Combine unique top features across tasks + force inject cation properties
+    selected_feature_names = list(set(selected_per_task))
     
     print(f"\nTop {max_features} Selected Physical Descriptors:")
     for rank, (feat, score) in enumerate(sorted_features[:max_features], 1):
@@ -338,10 +561,10 @@ def apply_tier2_supervised_filter(
     
     # 5. Diagnostic Visualization
     if show_plots:
-        fig, ax = plt.subplots(figsize=(10, 5))
+        fig, ax = plt.subplots(figsize=(10, 8))
         
         # Prepare data for top 12 candidate features comparison
-        top_candidates = [feat for feat, _ in sorted_features[:min(12, P)]]
+        top_candidates = [feat for feat, _ in sorted_features[:P]]
         df_plot = pd.DataFrame([
             {
                 'Feature': feat,
@@ -378,53 +601,144 @@ if __name__ == "__main__":
     TEST_FILE_PATH = "MTGPR_test.xlsx"
     
     # X_train, Y_train = generate_mock_data(n_samples=40, n_features=1500)
-    smiles_train, Y_train = extract_smiles_and_targets(TRAIN_FILE_PATH)
-    smiles_test, Y_test = extract_smiles_and_targets(TEST_FILE_PATH)
-    Y_train[:,0] = Y_train[:,1] / Y_train[:,0]
-    Y_test[:,0] = Y_test[:,1] / Y_test[:,0]
+    smiles_train, Y_train_raw = extract_smiles_and_targets(TRAIN_FILE_PATH)
+    smiles_test, Y_test_raw = extract_smiles_and_targets(TEST_FILE_PATH)
+
+    print(Y_train_raw)
+
+    # ==============================================================================
+    # 1. FEATURIZATION & COMPOSITE ASSEMBLY (X_sample)
+    # ==============================================================================
+
+    # Build raw composite feature matrices
+    df_X_train = build_composite_dataframe(smiles_train)
+    df_X_test = build_composite_dataframe(smiles_test)
+
+    # Extract feature names (List of strings for plots/tables)
+    feature_names = df_X_train.columns.tolist()
+
+    # Extract numerical values (2D NumPy array for MTGPR)
+    X_train_raw = df_X_train.values  # or df_X_train_selected.to_numpy()
+
+    # Do the exact same for your test set using the selected feature names
+    X_test_raw = df_X_test[feature_names].values
+
+    # ==============================================================================
+    # 2. TARGET TRANSFORMATION (T_m -> dS_fus)
+    # Assumes Y target columns are ordered as: [T_m (K), dH_fus (kJ/mol), dH_f (kJ/mol)]
+    # ==============================================================================
+
+
+    def transform_targets_to_dS(Y_raw):
+        Y_trans = Y_raw.copy()
+        # dS_fus = dH_fus / T_m
+        Y_trans[:, 0] = Y_raw[:, 1] / Y_raw[:, 0]
+        return Y_trans
+
+
+    Y_train_dS = transform_targets_to_dS(Y_train_raw)
+
+    X_train_tier1 = apply_tier1_unsupervised_filter(X_train_raw, feature_names, show_plots=True)
     
-    print(f"Featurizing {len(smiles_train)} SMILES strings via RDKit...")
-    X_train, X_train_names = featurize_smiles(smiles_train)
-    X_test, X_test_names = featurize_smiles(smiles_test)
-
-    X_train_tier1 = apply_tier1_unsupervised_filter(X_train, X_train_names, show_plots=False)
-
     X_train_tier2, final_features = apply_tier2_supervised_filter(
         X_train_tier1, 
-        Y_train, 
+        Y_train_dS, 
         max_features=6, 
         show_plots=True
     )
 
     # Convert test data to DataFrame and slice using the SAME retained feature list
-    X_test_df = pd.DataFrame(X_test, columns=X_test_names)
-    X_test_filtered = X_test_df[final_features]
+    X_test_filtered = df_X_test[final_features]
 
     print(
         f"Train Matrix Shape: {X_train_tier2.shape}"
     )  # (N_train, 49)
     print(f"Test Matrix Shape:  {X_test_filtered.shape}")  # (N_test, 49)
 
-    gp_framework = MTGPR()
-    gp_framework.fit(X_train_tier2.values, Y_train)
+    # ==============================================================================
+    # 5. MULTI-TASK GAUSSIAN PROCESS FIT & PREDICTION
+    # ==============================================================================
+
+    pipeline = MTGPPipeline(num_tasks=3, lr=0.03, num_epochs=1000)
+    pipeline.fit(X_train_tier2.values, Y_train_dS)
+
+    # Train MTGPR on the selected 8 features and dS_fus targets
+    # gp_model = MTGPR_gpy()
+    # gp_model.fit(X_train_tier2, Y_train_dS)
+
     
     print("\n=== Evaluating Candidate Precursors ===")
-    predictions = gp_framework.predict(X_test_filtered.values)
+    means, stds = pipeline.predict(X_test_filtered.values)
     
-    # Print results formatted nicely
+    dS_pred, dS_std = means[:, 0], stds[:, 0]
+    dH_pred, dH_std = means[:, 1], stds[:, 1]
+    dH_f_pred, dH_f_std = means[:, 2], stds[:, 2]
+
+    # Calculate derived T_m
+    T_m_pred = dH_pred / dS_pred
+
+    # Propagate uncertainty to T_m using Root-Sum-Square (RSS)
+    T_m_std = np.sqrt(
+        (dH_std / dS_pred)**2 + 
+        ((dH_pred * dS_std) / (dS_pred**2))**2
+    )
+
+    T_m_true = Y_test_raw[:, 0] 
+    dH_fus_true = Y_test_raw[:, 1] 
+    dH_f_true = Y_test_raw[:, 2]
+
+    # Output Results
     for i in range(len(X_test_filtered.values)):
-        print(f"\nCandidate {i+1}: {smiles_test[i]}")
-        for prop in ['T_m', 'dH_fus', 'dH_f']:
-            if prop == 'T_m':
-                pred = predictions['dH_fus']['prediction'][i]/predictions[prop]['prediction'][i]
-                uncert = predictions[prop]['uncertainty'][i]
-                flag = predictions[prop]['high_risk_flag'][i]
-            else:
-                pred = predictions[prop]['prediction'][i]
-                uncert = predictions[prop]['uncertainty'][i]
-                flag = predictions[prop]['high_risk_flag'][i]
+        print(f"Candidate {i+1}: {smiles_test[i]}")
+        print(f"  T_m    : {T_m_pred[i]:.2f} ± {T_m_std[i]:.2f} K (Actual: {T_m_true[i]} K)")
+        print(f"  dH_fus : {dH_pred[i]:.2f} ± {dH_std[i]:.2f} kJ/mol (Actual: {dH_fus_true[i]} kJ/mol)")
+        print(f"  dH_f   : {dH_f_pred[i]:.2f} ± {dH_f_std[i]:.2f} kJ/mol (Actual: {dH_f_true[i]} kJ/mol)\n")
+
+    # Y_train[:,0] = Y_train[:,1] / Y_train[:,0]
+    # Y_test[:,0] = Y_test[:,1] / Y_test[:,0]
+    
+    # print(f"Featurizing {len(smiles_train)} SMILES strings via RDKit...")
+    # X_train, X_train_names = featurize_smiles(smiles_train)
+    # X_test, X_test_names = featurize_smiles(smiles_test)
+
+    # X_train_tier1 = apply_tier1_unsupervised_filter(X_train, X_train_names, show_plots=False)
+
+    # X_train_tier2, final_features = apply_tier2_supervised_filter(
+    #     X_train_tier1, 
+    #     Y_train, 
+    #     max_features=10, 
+    #     show_plots=True
+    # )
+
+    # # Convert test data to DataFrame and slice using the SAME retained feature list
+    # X_test_df = pd.DataFrame(X_test, columns=X_test_names)
+    # X_test_filtered = X_test_df[final_features]
+
+    # print(
+    #     f"Train Matrix Shape: {X_train_tier2.shape}"
+    # )  # (N_train, 49)
+    # print(f"Test Matrix Shape:  {X_test_filtered.shape}")  # (N_test, 49)
+
+    # gp_framework = MTGPR()
+    # gp_framework.fit(X_train_tier2.values, Y_train)
+    
+    # print("\n=== Evaluating Candidate Precursors ===")
+    # predictions = gp_framework.predict(X_test_filtered.values)
+    
+    # # Print results formatted nicely
+    # for i in range(len(X_test_filtered.values)):
+    #     print(f"\nCandidate {i+1}: {smiles_test[i]}")
+    #     for prop in ['T_m', 'dH_fus', 'dH_f']:
+    #         if prop == 'T_m':
+    #             pred = predictions['dH_fus']['prediction'][i]/predictions[prop]['prediction'][i]
+    #             uncert = predictions[prop]['uncertainty'][i]
+    #             flag = predictions[prop]['high_risk_flag'][i]
+    #         else:
+    #             pred = predictions[prop]['prediction'][i]
+    #             uncert = predictions[prop]['uncertainty'][i]
+    #             flag = predictions[prop]['high_risk_flag'][i]
             
-            flag_str = "[WARNING: EXTRAPOLATION]" if flag else "[RELIABLE]"
-            print(f"  {prop:6s}: {pred:7.2f} ± {uncert:6.2f} {flag_str}")
+    #         flag_str = "[WARNING: EXTRAPOLATION]" if flag else "[RELIABLE]"
+    #         print(f"  {prop:6s}: {pred:7.2f} ± {uncert:6.2f} {flag_str}")
 
   
