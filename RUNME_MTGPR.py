@@ -7,8 +7,7 @@ import pandas as pd
 import warnings
 
 from rdkit import Chem
-from rdkit.Chem import Descriptors, AllChem
-from rdkit.Chem import Descriptors, Fragments, rdFingerprintGenerator
+from rdkit.Chem import Descriptors, Fragments, rdFingerprintGenerator, Descriptors3D, AllChem
 
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -99,8 +98,82 @@ def get_morgan_fingerprint_dict(mol, radius=2, n_bits=32, prefix=""):
 
     return fp_dict
 
-def featurize_single_compound_to_dict(smiles, fp_bits = 512):
-    """Featurizes a SMILES string into a fully labeled composite dictionary."""
+def generate_3d_mol(mol):
+    """Generates a fast 3D ETKDG conformer and optimizes it with MMFF94."""
+    if mol is None or mol.GetNumAtoms() == 0:
+        return None
+
+    # Skip single atomic ions (e.g., Li+, Na+, Cl-)—they have no 3D shape
+    if mol.GetNumAtoms() == 1:
+        return None
+
+    m3d = Chem.AddHs(mol)
+    params = AllChem.ETKDGv3()
+    params.randomSeed = 42
+
+    # Embed conformer
+    res = AllChem.EmbedMolecule(m3d, params)
+    if res != 0:
+        # Fallback to random coordinates if ETKDG fails
+        AllChem.EmbedMolecule(m3d, useRandomCoords=True)
+
+    try:
+        AllChem.MMFFOptimizeMolecule(m3d, maxIters=200)
+    except Exception:
+        pass  # If forcefield fails, proceed with embedded coordinates
+
+    return m3d
+
+def get_3d_descriptors_with_names(mol, prefix=""):
+    """Extracts fast 3D shape, volume, radius of gyration, and principal moments."""
+    keys = [
+        "Asphericity",
+        "Eccentricity",
+        "InertialShapeFactor",
+        "NPR1",
+        "NPR2",
+        "PMI1",
+        "PMI2",
+        "PMI3",
+        "RadiusOfGyration",
+        "SpherocityIndex",
+    ]
+
+    d_3d = {}
+    m3d = generate_3d_mol(mol) if mol else None
+
+    if m3d is None or m3d.GetNumConformers() == 0:
+        for k in keys:
+            d_3d[f"{prefix}_3D_{k}"] = 0.0
+        d_3d[f"{prefix}_3D_VanDerWaalsVolume"] = 0.0
+        return d_3d
+
+    # Calculate RDKit 3D descriptors
+    d_3d[f"{prefix}_3D_Asphericity"] = Descriptors3D.Asphericity(m3d)
+    d_3d[f"{prefix}_3D_Eccentricity"] = Descriptors3D.Eccentricity(m3d)
+    d_3d[f"{prefix}_3D_InertialShapeFactor"] = Descriptors3D.InertialShapeFactor(
+        m3d
+    )
+    d_3d[f"{prefix}_3D_NPR1"] = Descriptors3D.NPR1(m3d)
+    d_3d[f"{prefix}_3D_NPR2"] = Descriptors3D.NPR2(m3d)
+    d_3d[f"{prefix}_3D_PMI1"] = Descriptors3D.PMI1(m3d)
+    d_3d[f"{prefix}_3D_PMI2"] = Descriptors3D.PMI2(m3d)
+    d_3d[f"{prefix}_3D_PMI3"] = Descriptors3D.PMI3(m3d)
+    d_3d[f"{prefix}_3D_RadiusOfGyration"] = Descriptors3D.RadiusOfGyration(m3d)
+    d_3d[f"{prefix}_3D_SpherocityIndex"] = Descriptors3D.SpherocityIndex(m3d)
+
+    # Fast van der Waals volume approximation
+    d_3d[f"{prefix}_3D_VanDerWaalsVolume"] = (
+        AllChem.ComputeMolVolume(m3d) if m3d else 0.0
+    )
+
+    return d_3d
+
+def featurize_single_compound_to_dict(smiles, fp_bits=32):
+    """Featurizes SMILES into a composite dictionary containing 2D, 3D,
+
+    fingerprints, and bulk thermodynamic descriptors.
+    """
     frags = smiles.split(".")
     mols = [
         Chem.MolFromSmiles(f) for f in frags if Chem.MolFromSmiles(f) is not None
@@ -117,14 +190,17 @@ def featurize_single_compound_to_dict(smiles, fp_bits = 512):
     is_ionic = 1.0 if (cation_mol is not None or anion_mol is not None) else 0.0
 
     # =========================================================================
-    # 1. Fragment Descriptor Blocks (RDKit 2D + Inorganic Injection)
+    # 1. Fragment Descriptors (2D + 3D Shape & Volume)
     # =========================================================================
     if is_ionic == 1.0:
-        d_cation = get_rdkit_descriptors_with_names(cation_mol, prefix="Cation")
-        d_anion = get_rdkit_descriptors_with_names(anion_mol, prefix="Anion")
-        d_neutral = get_rdkit_descriptors_with_names(None, prefix="Neutral")
+        d_cat_2d = get_rdkit_descriptors_with_names(cation_mol, prefix="Cation")
+        d_an_2d = get_rdkit_descriptors_with_names(anion_mol, prefix="Anion")
+        d_neu_2d = get_rdkit_descriptors_with_names(None, prefix="Neutral")
 
-        # Physical Properties
+        d_cat_3d = get_3d_descriptors_with_names(cation_mol, prefix="Cation")
+        d_an_3d = get_3d_descriptors_with_names(anion_mol, prefix="Anion")
+        d_neu_3d = get_3d_descriptors_with_names(None, prefix="Neutral")
+
         mw_cat = Descriptors.MolWt(cation_mol) if cation_mol else 0.0
         mw_an = Descriptors.MolWt(anion_mol) if anion_mol else 0.0
         tpsa_cat = Descriptors.TPSA(cation_mol) if cation_mol else 0.0
@@ -134,73 +210,86 @@ def featurize_single_compound_to_dict(smiles, fp_bits = 512):
         )
         rot_an = Descriptors.NumRotatableBonds(anion_mol) if anion_mol else 0
 
-        # Ratios & Cross-Terms
-        mw_ratio = mw_cat / (mw_an + 1e-5)
-        tpsa_ratio = tpsa_cat / (tpsa_an + 1e-5)
-        total_rot = rot_cat + rot_an
-
         # Substructure Fingerprints
-        fp_cation = get_morgan_fingerprint_dict(
+        fp_cat = get_morgan_fingerprint_dict(
             cation_mol, n_bits=fp_bits, prefix="Cation"
         )
-        fp_anion = get_morgan_fingerprint_dict(
+        fp_an = get_morgan_fingerprint_dict(
             anion_mol, n_bits=fp_bits, prefix="Anion"
         )
-        fp_neutral = get_morgan_fingerprint_dict(
+        fp_neu = get_morgan_fingerprint_dict(
             None, n_bits=fp_bits, prefix="Neutral"
         )
 
     else:
         parent_mol = mols[0] if len(mols) > 0 else None
-        d_cation = get_rdkit_descriptors_with_names(None, prefix="Cation")
-        d_anion = get_rdkit_descriptors_with_names(None, prefix="Anion")
-        d_neutral = get_rdkit_descriptors_with_names(
+        d_cat_2d = get_rdkit_descriptors_with_names(None, prefix="Cation")
+        d_an_2d = get_rdkit_descriptors_with_names(None, prefix="Anion")
+        d_neu_2d = get_rdkit_descriptors_with_names(
             parent_mol, prefix="Neutral"
         )
 
-        mw_ratio = 0.0
-        tpsa_ratio = 0.0
-        total_rot = (
-            Descriptors.NumRotatableBonds(parent_mol) if parent_mol else 0
-        )
+        d_cat_3d = get_3d_descriptors_with_names(None, prefix="Cation")
+        d_an_3d = get_3d_descriptors_with_names(None, prefix="Anion")
+        d_neu_3d = get_3d_descriptors_with_names(parent_mol, prefix="Neutral")
 
-        # Substructure Fingerprints
-        fp_cation = get_morgan_fingerprint_dict(
+        mw_cat, mw_an, tpsa_cat, tpsa_an = 0.0, 0.0, 0.0, 0.0
+        rot_cat, rot_an = 0, 0
+
+        fp_cat = get_morgan_fingerprint_dict(
             None, n_bits=fp_bits, prefix="Cation"
         )
-        fp_anion = get_morgan_fingerprint_dict(
+        fp_an = get_morgan_fingerprint_dict(
             None, n_bits=fp_bits, prefix="Anion"
         )
-        fp_neutral = get_morgan_fingerprint_dict(
+        fp_neu = get_morgan_fingerprint_dict(
             parent_mol, n_bits=fp_bits, prefix="Neutral"
         )
 
     # =========================================================================
-    # 2. Global Physical Assembly Block (Lattice / Thermodynamic Drivers)
+    # 2. Bulk & Physical Lattice Assembly Descriptors
     # =========================================================================
+    vol_cat = d_cat_3d.get("Cation_3D_VanDerWaalsVolume", 0.0)
+    vol_an = d_an_3d.get("Anion_3D_VanDerWaalsVolume", 0.0)
+
+    # Bulk density proxies & Kapustinskii-like ionic packing terms
+    effective_vol = (
+        (vol_cat + vol_an)
+        if is_ionic
+        else d_neu_3d.get("Neutral_3D_VanDerWaalsVolume", 0.0)
+    )
+    total_mw = (
+        (mw_cat + mw_an)
+        if is_ionic
+        else (Descriptors.MolWt(mols[0]) if mols else 0.0)
+    )
+
     d_assembly = {
         "Assembly_is_ionic": is_ionic,
-        "Assembly_mw_ratio": mw_ratio,
-        "Assembly_tpsa_ratio": tpsa_ratio,
-        "Assembly_total_rotatable_bonds": float(total_rot),
-        "Assembly_total_mw": (
-            (mw_cat + mw_an)
-            if is_ionic
-            else (Descriptors.MolWt(mols[0]) if mols else 0.0)
+        "Assembly_total_mw": total_mw,
+        "Assembly_mw_ratio": mw_cat / (mw_an + 1e-5),
+        "Assembly_tpsa_ratio": tpsa_cat / (tpsa_an + 1e-5),
+        "Assembly_volume_ratio": vol_cat / (vol_an + 1e-5),
+        "Assembly_total_rotatable_bonds": float(rot_cat + rot_an),
+        "Assembly_packing_density_proxy": total_mw / (effective_vol + 1e-5),
+        "Assembly_electrostatic_charge_density": (
+            (1.0 / (effective_vol + 1e-5)) if is_ionic else 0.0
         ),
     }
 
-    # Merge all blocks preserving complete key alignment
-    full_dict = {
-        **d_cation,
-        **d_anion,
-        **d_neutral,
+    # Combine everything
+    return {
+        **d_cat_2d,
+        **d_an_2d,
+        **d_neu_2d,
+        **d_cat_3d,
+        **d_an_3d,
+        **d_neu_3d,
         **d_assembly,
-        **fp_cation,
-        **fp_anion,
-        **fp_neutral,
+        **fp_cat,
+        **fp_an,
+        **fp_neu,
     }
-    return full_dict
 
 
 def build_composite_dataframe(smiles_list):
@@ -539,22 +628,42 @@ def apply_tier2_supervised_filter(
 
     # 3. Sort features by aggregate stability & weight score
     sorted_features = sorted(feature_scores.items(), key=lambda x: x[1], reverse=True)
-    selected_per_task = []
-    for task_name in target_names:
-        # Rank features for THIS task only
-        task_scores = task_feature_scores[task_name]
-        top_task_feats = sorted(
-            task_scores.items(), key=lambda x: x[1], reverse=True
-        )[:2]
-        selected_per_task.extend([f[0] for f in top_task_feats])
+    selected_feature_names = []
 
-    # Combine unique top features across tasks + force inject cation properties
-    selected_feature_names = list(set(selected_per_task))
-    
-    print(f"\nTop {max_features} Selected Physical Descriptors:")
-    for rank, (feat, score) in enumerate(sorted_features[:max_features], 1):
-        print(f"  {rank}. {feat:<30} (Cumulative Score: {score:.3f})")
-    print(f"==========================================================\n")
+    # Sort each task's candidate features by its OWN score for that specific task
+    task_rankings = {
+        task: [
+            f[0]
+            for f in sorted(
+                task_feature_scores[task].items(),
+                key=lambda x: x[1],
+                reverse=True,
+            )
+        ]
+        for task in target_names
+    }
+
+    # Interleave selection across tasks to hit exact max_features count
+    rank_idx = 0
+    while len(selected_feature_names) < max_features and rank_idx < P:
+        for task in target_names:
+            feat = task_rankings[task][rank_idx]
+            if (
+                feat not in selected_feature_names
+                and len(selected_feature_names) < max_features
+            ):
+                selected_feature_names.append(feat)
+        rank_idx += 1
+
+    # Print out selected features alongside their global cumulative score
+    print(
+        f"\nTop {len(selected_feature_names)} Selected Physical Descriptors"
+        f" (Target: {max_features}):"
+    )
+    for rank, feat in enumerate(selected_feature_names, 1):
+        score = feature_scores[feat]
+        print(f"  {rank}. {feat:<35} (Cumulative Score: {score:.3f})")
+    print("==========================================================\n")
     
     # 4. Slice Tier 1 DataFrame down to Tier 2
     X_tier2_df = X_train_filtered_df[selected_feature_names].copy()
@@ -564,7 +673,7 @@ def apply_tier2_supervised_filter(
         fig, ax = plt.subplots(figsize=(10, 8))
         
         # Prepare data for top 12 candidate features comparison
-        top_candidates = [feat for feat, _ in sorted_features[:P]]
+        top_candidates = [feat for feat, _ in sorted_features[:min(P,40)]]
         df_plot = pd.DataFrame([
             {
                 'Feature': feat,
@@ -643,7 +752,7 @@ if __name__ == "__main__":
     X_train_tier2, final_features = apply_tier2_supervised_filter(
         X_train_tier1, 
         Y_train_dS, 
-        max_features=6, 
+        max_features=np.floor(X_train_tier1.shape[0] / 5.0), 
         show_plots=True
     )
 
@@ -659,7 +768,7 @@ if __name__ == "__main__":
     # 5. MULTI-TASK GAUSSIAN PROCESS FIT & PREDICTION
     # ==============================================================================
 
-    pipeline = MTGPPipeline(num_tasks=3, lr=0.03, num_epochs=1000)
+    pipeline = MTGPPipeline(num_tasks=3, lr=0.01, num_epochs=2000)
     pipeline.fit(X_train_tier2.values, Y_train_dS)
 
     # Train MTGPR on the selected 8 features and dS_fus targets
