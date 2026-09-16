@@ -747,13 +747,13 @@ if __name__ == "__main__":
 
     Y_train_dS = transform_targets_to_dS(Y_train_raw)
 
-    X_train_tier1 = apply_tier1_unsupervised_filter(X_train_raw, feature_names, show_plots=True)
+    X_train_tier1 = apply_tier1_unsupervised_filter(X_train_raw, feature_names, show_plots=False)
     
     X_train_tier2, final_features = apply_tier2_supervised_filter(
         X_train_tier1, 
         Y_train_dS, 
-        max_features=np.floor(X_train_tier1.shape[0] / 5.0), 
-        show_plots=True
+        max_features=np.floor(X_train_tier1.shape[0] / 4.0), 
+        show_plots=False
     )
 
     # Convert test data to DataFrame and slice using the SAME retained feature list
@@ -768,7 +768,7 @@ if __name__ == "__main__":
     # 5. MULTI-TASK GAUSSIAN PROCESS FIT & PREDICTION
     # ==============================================================================
 
-    pipeline = MTGPPipeline(num_tasks=3, lr=0.01, num_epochs=2000)
+    pipeline = MTGPPipeline(num_tasks=3, lr=0.01, num_epochs=1000)
     pipeline.fit(X_train_tier2.values, Y_train_dS)
 
     # Train MTGPR on the selected 8 features and dS_fus targets
