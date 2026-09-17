@@ -181,3 +181,45 @@ def canonicalize_smiles(smiles_list):
             canonical_smiles.append(None)
 
     return canonical_smiles
+
+def extract_smiles_and_targets(filepath, target_columns=None, smiles_column='SMILES'):
+    """
+    Extracts raw SMILES strings and property target values (Y) from an Excel file.
+    
+    Parameters:
+    - filepath: Path to the Excel (.xlsx) file.
+    - target_columns: List of target column names in the Excel file.
+    - smiles_column: Name of the column containing SMILES strings.
+    
+    Returns:
+    - smiles_data: 1D numpy array of SMILES strings.
+    - Y: 2D numpy array of target property values.
+    """
+    if target_columns is None:
+        target_columns = ['T_m', 'dH_fus', 'dH_f']
+        
+    try:
+        df = pd.read_excel(filepath, na_values=["—", "-", "N/A"])
+    except FileNotFoundError:
+        raise FileNotFoundError(f"Could not find the Excel file at '{filepath}'.")
+    
+    # Ensure target columns exist in the DataFrame
+    missing_targets = [col for col in target_columns if col not in df.columns]
+    if missing_targets:
+        raise ValueError(f"Missing target columns in Excel file: {missing_targets}")
+    
+    # Find SMILES column (case-insensitive check if exact match missing)
+    if smiles_column not in df.columns:
+        matched_cols = [c for c in df.columns if str(c).strip().upper() == smiles_column.upper()]
+        if matched_cols:
+            smiles_column = matched_cols[0]
+        else:
+            raise ValueError(f"Could not find SMILES column '{smiles_column}' in Excel file.")
+            
+    # Drop rows missing  SMILES strings
+    df = df.dropna(subset=[smiles_column])
+    
+    smiles_data = df[smiles_column].astype(str).values
+    Y = df[target_columns].values
+
+    return smiles_data, Y

@@ -177,23 +177,48 @@ class MTGPR_sklearn:
         return results
 
 import numpy as np
-from sklearn.preprocessing import StandardScaler, RobustScaler
+from sklearn.preprocessing import StandardScaler
 import torch
 import gpytorch
 
+class JobackMean(gpytorch.means.Mean):
+    def __init__(self, train_priors_2d, test_priors_2d):
+        super().__init__()
+        self.train_priors = torch.tensor(train_priors_2d, dtype=torch.float32)
+        self.test_priors = torch.tensor(test_priors_2d, dtype=torch.float32)
+        
+        # Buffer to hold the currently active 1D vector (sized 136 for train, N for test)
+        self.register_buffer("active_priors", torch.zeros(0))
+
+    def apply_train_mask(self, row_indices, task_indices):
+        """Slices the 2D training matrix down to the exact 1D shape of valid targets."""
+        self.active_priors = self.train_priors[row_indices, task_indices]
+
+    def set_predict_task(self, task_idx):
+        """Pulls the 1D test vector for the specific property being predicted."""
+        self.active_priors = self.test_priors[:, task_idx]
+
+    def forward(self, x):
+        return self.active_priors
 
 # =====================================================================
 # 1. Low-Level GPyTorch Core Architecture
 # =====================================================================
 class _GPyTorchMTGPModel(gpytorch.models.ExactGP):
-    def __init__(self, train_x, train_i, train_y, likelihood, num_tasks=3):
+    def __init__(self, train_x, train_i, train_y, likelihood, mean_module=None, num_tasks=3):
         super().__init__((train_x, train_i), train_y, likelihood)
 
-        self.mean_module = gpytorch.means.ConstantMean()
+        # self.mean_module = gpytorch.means.LinearMean(input_size=train_x.shape[-1])
+        # self.mean_module = gpytorch.means.ZeroMean()
+        self.mean_module = mean_module if mean_module is not None else gpytorch.means.ConstantMean()
 
         # Spatial feature kernel (e.g., Matern 3/2 with ARD)
-        self.covar_module = gpytorch.kernels.MaternKernel(
-            nu=1.5, ard_num_dims=train_x.shape[-1], lengthscale_constraint=gpytorch.constraints.Interval(0.01, 2.0)
+        self.covar_module = gpytorch.kernels.ScaleKernel(
+            gpytorch.kernels.MaternKernel(
+                nu=1.5,
+                ard_num_dims=train_x.shape[-1],
+                lengthscale_constraint=gpytorch.constraints.GreaterThan(1e-2),
+            )
         )
 
         # Task covariance kernel (learns task-to-task correlation matrix)
@@ -222,29 +247,30 @@ class MTGPPipeline:
     Generic Multi-Task Gaussian Process wrapper handling scaling, NaN masking,
     GPyTorch joint optimization, and physical target recovery (T_m reconstruction).
     """
-    def __init__(self, num_tasks=3, lr=0.01, num_epochs=1000):
+    def __init__(self, mean_module=None, num_tasks=3, lr=0.01, num_epochs=1000):
         self.num_tasks = num_tasks
         self.lr = lr
         self.num_epochs = num_epochs
 
         self.x_scaler = StandardScaler()
+        self.mean_module = mean_module
         self.model = None
         self.likelihood = None
 
     def fit(self, X: np.ndarray, Y: np.ndarray):
-        # 1. Standardize features X
+        # Standardize features X
         X_scaled = self.x_scaler.fit_transform(X)
 
-        # 2. Standardize targets Y independently per task (ignoring NaNs)
+        # Standardize targets Y independently per task (ignoring NaNs)
         self.y_mean_ = np.nanmean(Y, axis=0)
         self.y_std_ = np.nanstd(Y, axis=0)
         self.y_std_[self.y_std_ == 0] = 1.0
 
         Y_scaled = (Y - self.y_mean_) / self.y_std_
 
-        # 3. Unroll only valid (non-NaN) observations
-        x_flat, i_flat, y_flat = [], [], []
-
+        # Unroll only valid (non-NaN) observations
+        x_flat, i_flat, y_flat, row_flat = [], [], [], []
+        
         for row_idx in range(X_scaled.shape[0]):
             for task_idx in range(self.num_tasks):
                 val = Y_scaled[row_idx, task_idx]
@@ -252,14 +278,26 @@ class MTGPPipeline:
                     x_flat.append(X_scaled[row_idx])
                     i_flat.append(task_idx)
                     y_flat.append(val)
+                    row_flat.append(row_idx) # Track the row!
+
+        train_x = torch.tensor(np.array(x_flat), dtype=torch.float32)
+        train_i = torch.tensor(np.array(i_flat), dtype=torch.long)
+        train_y = torch.tensor(np.array(y_flat), dtype=torch.float32)
+
+        if hasattr(self.mean_module, 'apply_train_mask'):
+            self.mean_module.apply_train_mask(row_flat, i_flat)
 
         train_x = torch.tensor(np.array(x_flat), dtype=torch.float32)
         train_i = torch.tensor(np.array(i_flat), dtype=torch.long)
         train_y = torch.tensor(np.array(y_flat), dtype=torch.float32)
 
         # 4. Initialize likelihood and model
-        self.likelihood = gpytorch.likelihoods.GaussianLikelihood(
-            noise_constraint=gpytorch.constraints.Interval(1e-4, 0.01)
+        task_noise_map = {0: 1e-3, 1: 1e-4, 2: 5e-2}  
+        train_noise = torch.tensor([task_noise_map[i.item()] for i in train_i], dtype=torch.float32)
+
+        self.likelihood = gpytorch.likelihoods.FixedNoiseGaussianLikelihood(
+            noise=train_noise,
+            learn_additional_noise=False
         )
 
         self.model = _GPyTorchMTGPModel(
@@ -267,6 +305,7 @@ class MTGPPipeline:
             train_i,
             train_y,
             self.likelihood,
+            self.mean_module,
             num_tasks=self.num_tasks,
         )
 
@@ -305,7 +344,6 @@ class MTGPPipeline:
         with (
             torch.no_grad(),
             gpytorch.settings.fast_pred_var(),
-            gpytorch.settings.cholesky_jitter(1e-3),
         ):
             # Query the model for each target task independently
             for task_idx in range(self.num_tasks):
@@ -314,7 +352,9 @@ class MTGPPipeline:
                     (n_samples,), task_idx, dtype=torch.long
                 )
 
-                pred_dist = self.likelihood(self.model(test_x, test_i))
+                task_noise_map = {0: 1e-3, 1: 1e-4, 2: 5e-2}
+                test_noise = torch.full((n_samples,), task_noise_map[task_idx], dtype=torch.float32)
+                pred_dist = self.likelihood(self.model(test_x, test_i), noise=test_noise)
 
                 means_scaled[:, task_idx] = pred_dist.mean.numpy()
                 stds_scaled[:, task_idx] = np.sqrt(pred_dist.variance.numpy())
