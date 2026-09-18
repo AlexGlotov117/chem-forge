@@ -358,9 +358,10 @@ class MolecularEncoder:
     Handles feature generation, filtering, target transformation,
     and Joback physical prior calculations directly from SMILES.
     """
-    def __init__(self, variance_thresh=0.01, corr_thresh=0.90):
+    def __init__(self, output_dir, variance_thresh=0.01, corr_thresh=0.90, override_features=None):
         self.variance_thresh = variance_thresh
         self.corr_thresh = corr_thresh
+        self.override_features = override_features or []
         self.selected_features = None
 
     def featurize(self, smiles_list):
@@ -388,41 +389,44 @@ class MolecularEncoder:
                 
         return preds
 
-    def fit_transform_features(self, smiles_train, Y_train, target_names=['T_m', 'dH_fus', 'dH_f'], max_features=8, show_plots=True):
+    def fit_transform_features(self, smiles_train, Y_train, target_names=['T_m', 'dH_fus', 'dH_f'], max_features=8, override_features=None, show_plots=False):
         df_raw = self.featurize(smiles_train)
         n_initial = df_raw.shape[1]
 
+        # Merge instance overrides with call-time overrides
+        overrides = list(set(self.override_features + (override_features or [])))
+        
+        # Verify override features actually exist in raw featurized data
+        valid_overrides = [f for f in overrides if f in df_raw.columns]
+        invalid_overrides = set(overrides) - set(valid_overrides)
+        if invalid_overrides:
+            print(f"[Warning] The following override features were not found in generated features: {invalid_overrides}")
+
         print(f"\n================ TIER 1 FEATURE FILTER ================")
         print(f"Initial Feature Count: {n_initial}")
+        if valid_overrides:
+            print(f"Override/Bypass Features Registered ({len(valid_overrides)}): {valid_overrides}")
 
         # Step 0: Clean NaNs
         nan_cols = df_raw.columns[df_raw.isna().any() | np.isinf(df_raw).any()].tolist()
-        if len(nan_cols) > 0:
-            print(f"[Step 0] Found {len(nan_cols)} NaN-containing descriptors. Dropping...")
-            df_clean = df_raw.drop(columns=nan_cols)
-        else:
-            print(f"[Step 0] Clean! No NaN values found.")
-            df_clean = df_raw.copy()
+        nan_cols_to_drop = [c for c in nan_cols if c not in valid_overrides]
+        df_clean = df_raw.drop(columns=nan_cols_to_drop) if len(nan_cols_to_drop) > 0 else df_raw.copy()
 
         # Step 1: Variance Filter
         vt = VarianceThreshold(threshold=self.variance_thresh)
         vt.fit(df_clean)
-        retained_var = df_clean.columns[vt.get_support()]
-        dropped_var = df_clean.columns[~vt.get_support()]
-        df_var = df_clean[retained_var].copy()
-        n_after_var = df_var.shape[1]
-
-        print(f"[Step 1] Low Variance Filter (<= {self.variance_thresh}):")
-        print(f"    - Removed {len(dropped_var)} / {n_initial} features")
+        retained_var = set(df_clean.columns[vt.get_support()])
+        retained_var.update(valid_overrides) # Explicitly keep overrides
+        df_var = df_clean[list(retained_var)].copy()
 
         # Step 2: Collinearity Filter
         corr_matrix = df_var.corr().abs()
         upper_tri = corr_matrix.where(np.triu(np.ones(corr_matrix.shape), k=1).astype(bool))
-        cols_to_drop_corr = [col for col in upper_tri.columns if any(upper_tri[col] > self.corr_thresh)]
-
-        print(f"[Step 2] Collinearity Filter (|r| > {self.corr_thresh}):")
-        for col in cols_to_drop_corr:
-            print(f"    - Dropping '{col}'")
+        
+        cols_to_drop_corr = [
+            col for col in upper_tri.columns 
+            if any(upper_tri[col] > self.corr_thresh) and col not in valid_overrides
+        ]
 
         df_t1 = df_var.drop(columns=cols_to_drop_corr).copy()
         n_t1 = df_t1.shape[1]
@@ -476,7 +480,7 @@ class MolecularEncoder:
                 mask = np.ones(len(valid_idx), dtype=bool)
                 mask[i] = False
                 
-                lasso = LassoCV(cv=min(5, len(valid_idx)-2), max_iter=10000, random_state=42)
+                lasso = LassoCV(cv=min(5, len(valid_idx)-2), max_iter=50000, random_state=42)
                 try:
                     lasso.fit(X_valid[mask], y_valid[mask])
                     for idx in np.where(np.abs(lasso.coef_) > 1e-5)[0]:
@@ -486,12 +490,28 @@ class MolecularEncoder:
                 except Exception:
                     pass
 
-        sorted_features = sorted(feature_scores.items(), key=lambda x: x[1], reverse=True)
-        self.selected_features = [f[0] for f in sorted_features[:max_features]]
+        # Sort ONLY non-override features by LASSO score
+        sorted_features = sorted(
+            [f for f in feature_scores.items() if f[0] not in valid_overrides], 
+            key=lambda x: x[1], 
+            reverse=True
+        )
 
-        print(f"\nTop {len(self.selected_features)} Selected Physical Descriptors:")
+        # Grab top-ranked features from LASSO
+        top_ranked = [f[0] for f in sorted_features[:(max_features-len(valid_overrides))]]
+        
+        # Combine overrides + top LASSO features dynamically
+        final_selected = list(valid_overrides)
+        for feat in top_ranked:
+            if feat not in final_selected:
+                final_selected.append(feat)
+
+        self.selected_features = final_selected
+
+        print(f"\nFinal Selected Features ({len(self.selected_features)} Total):")
         for rank, feat in enumerate(self.selected_features, 1):
-            print(f"  {rank}. {feat:<35} (Score: {feature_scores[feat]:.3f})")
+            is_override = " [OVERRIDE]" if feat in valid_overrides else ""
+            print(f"  {rank}. {feat:<35} (Score: {feature_scores.get(feat, 0.0):.3f}){is_override}")
 
         # Plot Tier 2
         if show_plots:

@@ -26,7 +26,7 @@ class Compound:
         mol = Chem.AddHs(mol)
         formula_dict = {}
         for atom in mol.GetAtoms():
-            symbol = atom.GetSymbol()
+            symbol = atom.GetSymbol().upper()
             formula_dict[symbol] = formula_dict.get(symbol, 0) + 1
         return formula_dict
         
@@ -98,12 +98,14 @@ class Mixture:
         self._cea_lib = cea  
         fuels_cea = [comp.cea_reactant for comp in self.compounds]
         reac_names = fuels_cea + [self.oxidizer_name]
+
         
         self._reac = cea.Mixture(reac_names)
         prod = cea.Mixture(reac_names, products_from_reactants=True)
-        
+
         self._solver_rocket = cea.RocketSolver(prod, reactants=self._reac)
         self._solution = cea.RocketSolution(self._solver_rocket)
+
     
     # -------------------------------------------------------------------------
     # State & Caching Logic

@@ -253,6 +253,13 @@ class MTGPPipeline:
         self.num_epochs = num_epochs
 
         self.x_scaler = StandardScaler()
+        self.train_x = None
+        self.train_i = None
+        self.train_y = None
+        
+        self.y_mean_ = None
+        self.y_std_ = None
+
         self.mean_module = mean_module
         self.model = None
         self.likelihood = None
@@ -269,7 +276,7 @@ class MTGPPipeline:
         Y_scaled = (Y - self.y_mean_) / self.y_std_
 
         # Unroll only valid (non-NaN) observations
-        x_flat, i_flat, y_flat, row_flat = [], [], [], []
+        x_flat, i_flat, y_flat = [], [], []
         
         for row_idx in range(X_scaled.shape[0]):
             for task_idx in range(self.num_tasks):
@@ -278,22 +285,14 @@ class MTGPPipeline:
                     x_flat.append(X_scaled[row_idx])
                     i_flat.append(task_idx)
                     y_flat.append(val)
-                    row_flat.append(row_idx) # Track the row!
+                    
 
-        train_x = torch.tensor(np.array(x_flat), dtype=torch.float32)
-        train_i = torch.tensor(np.array(i_flat), dtype=torch.long)
-        train_y = torch.tensor(np.array(y_flat), dtype=torch.float32)
+        self.train_x = torch.tensor(np.array(x_flat), dtype=torch.float32)
+        self.train_i = torch.tensor(np.array(i_flat), dtype=torch.long)
+        self.train_y = torch.tensor(np.array(y_flat), dtype=torch.float32)
 
-        if hasattr(self.mean_module, 'apply_train_mask'):
-            self.mean_module.apply_train_mask(row_flat, i_flat)
-
-        train_x = torch.tensor(np.array(x_flat), dtype=torch.float32)
-        train_i = torch.tensor(np.array(i_flat), dtype=torch.long)
-        train_y = torch.tensor(np.array(y_flat), dtype=torch.float32)
-
-        # 4. Initialize likelihood and model
         task_noise_map = {0: 1e-3, 1: 1e-4, 2: 5e-2}  
-        train_noise = torch.tensor([task_noise_map[i.item()] for i in train_i], dtype=torch.float32)
+        train_noise = torch.tensor([task_noise_map[i.item()] for i in self.train_i], dtype=torch.float32)
 
         self.likelihood = gpytorch.likelihoods.FixedNoiseGaussianLikelihood(
             noise=train_noise,
@@ -301,9 +300,9 @@ class MTGPPipeline:
         )
 
         self.model = _GPyTorchMTGPModel(
-            train_x,
-            train_i,
-            train_y,
+            self.train_x,
+            self.train_i,
+            self.train_y,
             self.likelihood,
             self.mean_module,
             num_tasks=self.num_tasks,
@@ -317,14 +316,13 @@ class MTGPPipeline:
             self.likelihood, self.model
         )
 
-        print(
-            f"[MTGPPipeline] Optimization started ({self.num_epochs} epochs)..."
-        )
+        print(f"[MTGPPipeline] Optimization started ({self.num_epochs} epochs)...")
+
         with gpytorch.settings.cholesky_jitter(1e-3):
             for epoch in range(self.num_epochs):
                 optimizer.zero_grad()
-                output = self.model(train_x, train_i)
-                loss = -mll(output, train_y)
+                output = self.model(self.train_x, self.train_i)
+                loss = -mll(output, self.train_y)
                 loss.backward()
                 optimizer.step()
 
@@ -341,10 +339,9 @@ class MTGPPipeline:
         means_scaled = np.zeros((n_samples, self.num_tasks))
         stds_scaled = np.zeros((n_samples, self.num_tasks))
 
-        with (
-            torch.no_grad(),
-            gpytorch.settings.fast_pred_var(),
-        ):
+        task_noise_map = {0: 1e-3, 1: 1e-4, 2: 5e-2}
+
+        with torch.no_grad(), gpytorch.settings.fast_pred_var():
             # Query the model for each target task independently
             for task_idx in range(self.num_tasks):
                 test_x = torch.tensor(X_test_scaled, dtype=torch.float32)
@@ -352,7 +349,6 @@ class MTGPPipeline:
                     (n_samples,), task_idx, dtype=torch.long
                 )
 
-                task_noise_map = {0: 1e-3, 1: 1e-4, 2: 5e-2}
                 test_noise = torch.full((n_samples,), task_noise_map[task_idx], dtype=torch.float32)
                 pred_dist = self.likelihood(self.model(test_x, test_i), noise=test_noise)
 
