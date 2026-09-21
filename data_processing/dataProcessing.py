@@ -33,7 +33,7 @@ def createUniqueCombos(input_file: str, output_file: str = "combinations.xlsx", 
     from rdkit import Chem
     print(f"Loading compounds from {input_file}...")
 
-    df_pure = pd.read_excel(input_file, sheet_name="Input")
+    df_pure = pd.read_excel(input_file, sheet_name="Pure Input")
 
     # Extract and canonicalize unique SMILES
     unique_smiles = set()
@@ -252,7 +252,7 @@ def prepare_MTGPR_Tm_Hfus_Hf(
     Checks for missing physical properties in pureComponents.xlsx, triggers GPR 
     imputation if needed, and writes populated inputs + system combinations.
     """
-    df = pd.read_excel(excel_path, sheet_name="Input")
+    df = pd.read_excel(excel_path, sheet_name="Pure Input")
     
     # Target column identifiers
     tm_col = "Melting Temperature [K]"
@@ -295,13 +295,13 @@ def prepare_MTGPR_Tm_Hfus_Hf(
                 
         filled_excel_path = os.path.join(out_filled_dir, "pureComponents_filled.xlsx")
         with pd.ExcelWriter(filled_excel_path, engine='openpyxl') as writer:
-            df.to_excel(writer, sheet_name="Input", index=False)
+            df.to_excel(writer, sheet_name="Pure Input", index=False)
         print(f"[Workflow Prep] Updated filled component sheet saved to '{filled_excel_path}'.")
     else:
         print("[Workflow Prep] All pure component properties provided. Skipping GPR imputation.")
         filled_excel_path = os.path.join(out_filled_dir, "pureComponents_filled.xlsx")
         with pd.ExcelWriter(filled_excel_path, engine='openpyxl') as writer:
-            df.to_excel(writer, sheet_name="Input", index=False)
+            df.to_excel(writer, sheet_name="Pure Input", index=False)
 
     combos_path = os.path.join(out_filled_dir, "combinations.xlsx")
     generate_combinations(df, arities=combination_arities, output_file=combos_path)

@@ -5,6 +5,7 @@ import numpy as np
 @dataclass
 class Compound:
     name: str
+    smiles: str 
     mw: float                    # Molecular weight
     T_fus: float                # Melting temperature (K)
     h_fus: float                 # Enthalpy of fusion (J/mol)
@@ -20,9 +21,11 @@ class Compound:
     enthalpy_units: str = "kJ/mol"
     ref_temperature: float = 298
 
-    def extract_formula_from_smiles(smiles_str: str) -> dict:
-        mol = Chem.MolFromSmiles(smiles_str)
-        if mol is None: raise ValueError(f"Invalid SMILES: {smiles_str}")
+    def extract_formula_from_smiles(self, smiles_str: Optional[str] = None) -> dict:
+        from rdkit import Chem
+        target_smiles = smiles_str or self.smiles
+        mol = Chem.MolFromSmiles(target_smiles)
+        if mol is None: raise ValueError(f"Invalid SMILES: {target_smiles}")
         mol = Chem.AddHs(mol)
         formula_dict = {}
         for atom in mol.GetAtoms():
@@ -40,7 +43,10 @@ class Compound:
         import cea  # Imported inline to keep chemical.py decoupled if CEA isn't used
         
         if not self.formula:
-            raise ValueError(f"Chemical formula dictionary missing for CEA component: {self.name}")
+            if self.smiles:
+                self.formula = self.extract_formula_from_smiles(self.smiles)
+            else:
+                raise ValueError(f"Chemical formula dictionary missing for CEA component: {self.name}")
             
         return cea.Reactant(
             name=f"{self.name.strip()[:15]}",
@@ -67,13 +73,16 @@ class Mixture:
         # Context/State Tracking
         self._current_x: Optional[np.ndarray] = None
         self._current_gamma: Optional[np.ndarray] = None
+        self._current_hE: Optional[float] = None
         
         # Split Execution Caches
         self._sle_cache: Dict[str, Any] = {}
         self._cea_cache: Dict[str, Any] = {}
+        self._hanna_curve_cache: Dict[str, Any] = {}
         
         # Lazy Solver Handles (Kept completely unallocated at start)
         self._solver_sle = None
+        self._nonideal_predictor = None
         self._cea_lib = None
         self._reac = None
         self._solver_rocket = None
@@ -88,6 +97,13 @@ class Mixture:
             return
         from models.solvers import SLESolver
         self._solver_sle = SLESolver()
+
+    def _init_nonideal_engine(self):
+        """Instantiates the HANNA non-ideal activity coefficient predictor on demand."""
+        if self._nonideal_predictor is not None:
+            return
+        from models.HANNA2.utils.HANNA_predictor import HANNA_Predictor
+        self._nonideal_predictor = HANNA_Predictor()
 
     def _init_cea_engine(self):
         """Loads CEA library and builds rocket mechanisms only when needed."""
@@ -106,24 +122,141 @@ class Mixture:
         self._solver_rocket = cea.RocketSolver(prod, reactants=self._reac)
         self._solution = cea.RocketSolution(self._solver_rocket)
 
-    
-    # -------------------------------------------------------------------------
-    # State & Caching Logic
-    # -------------------------------------------------------------------------
-    def set_composition(self, x: np.ndarray, gamma: Optional[np.ndarray] = None, force_recalc: bool = False):
-        x = np.asarray(x)
-        if gamma is None:
-            gamma = np.ones_like(x)
+    def predict_composition_space(self, temperature: float = 298.0) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """
+        Queries HANNA over the full composition grid using `predict_over_composition`.
+        Caches the raw curves and returns (molar_fractions_all, ln_gammas, gE, hE).
+        """
+        smiles_list = [c.smiles for c in self.compounds]
+        if any(not s for s in smiles_list):
+            raise ValueError("All compounds in mixture must have a valid SMILES string defined to predict gammas.")
+            
+        self._init_nonideal_engine()
+        
+        molar_fractions_all, ln_gammas, gE, hE = self._nonideal_predictor.predict_over_composition(
+            smiles_list=smiles_list,
+            temperature=temperature
+        )
+        
+        # Cache results for composition lookups / interpolation
+        self._hanna_curve_cache = {
+            "molar_fractions_all": np.asarray(molar_fractions_all),
+            "ln_gammas": np.asarray(ln_gammas),
+            "gammas": np.exp(np.asarray(ln_gammas)),
+            "gE": np.asarray(gE),
+            "hE": np.asarray(hE),
+            "temperature": temperature
+        }
+        
+        return molar_fractions_all, ln_gammas, gE, hE
+
+    def interpolate_thermo_properties(
+        self, 
+        x: np.ndarray, 
+        temperature: float = 300.0,
+        gamma_scaling_alpha: Optional[np.ndarray] = None,
+        scaling_profile: str = "exponential",
+        steepness_k: float = 15.0
+    ) -> tuple[np.ndarray, float]:
+        """
+        Interpolates gamma and excess enthalpy (hE), applying a composition-dependent
+        scaling profile that anchors at 1.0 for x_i = 1.0 and steeply adjusts away from pure composition.
+        
+        Parameters:
+        -----------
+        gamma_scaling_alpha : array-like or None
+            Target fractional scaling shift at mixture conditions (e.g. [0.20, -0.10]).
+        scaling_profile : str
+            'exponential' (default steep drop/climb), 'quadratic', or 'linear'.
+        steepness_k : float
+            Steepness factor for exponential drop (higher values = sharper crash near x_i = 1.0).
+        """
+        x = np.asarray(x, dtype=float)
+        
+        # Ensure HANNA curve cache matches requested temperature
+        if not self._hanna_curve_cache or self._hanna_curve_cache.get("temperature") != temperature:
+            self.predict_composition_space(temperature=temperature)
+            
+        grid_x = self._hanna_curve_cache["molar_fractions_all"]
+        grid_gammas = self._hanna_curve_cache["gammas"]
+        grid_hE = self._hanna_curve_cache["hE"]
+
+        # Interpolate raw predictions
+        if grid_x.ndim == 1 or grid_x.shape[1] == 1:
+            x1_grid = grid_x.flatten()
+            x1_target = x[0]
+            
+            gamma = np.array([
+                np.interp(x1_target, x1_grid, grid_gammas[:, i]) 
+                for i in range(len(self.compounds))
+            ])
+            hE_val = float(np.interp(x1_target, x1_grid, grid_hE.flatten()))
         else:
-            gamma = np.asarray(gamma)
+            distances = np.linalg.norm(grid_x - x, axis=1)
+            idx = np.argmin(distances)
+            gamma = grid_gammas[idx]
+            hE_val = float(grid_hE[idx])
+
+        # Apply steep composition-dependent scaling
+        if gamma_scaling_alpha is not None:
+            alpha = np.asarray(gamma_scaling_alpha, dtype=float)
+            if alpha.shape[0] != len(self.compounds):
+                raise ValueError(f"gamma_scaling_alpha must match number of compounds ({len(self.compounds)})")
+            
+            sum_other = 1.0 - x
+            
+            if scaling_profile == "exponential":
+                # Crashes/climbs steeply as soon as sum_other > 0 (x_i < 1.0)
+                f_x = 1.0 - np.exp(-steepness_k * sum_other)
+            elif scaling_profile == "quadratic":
+                f_x = sum_other ** 2
+            elif scaling_profile == "linear":
+                f_x = sum_other
+            else:
+                raise ValueError(f"Unknown scaling profile: {scaling_profile}")
+                
+            scaling_factors = 1.0 + alpha * f_x
+            gamma = gamma * scaling_factors
+
+        return gamma, hE_val
+    
+    def set_composition(
+        self, 
+        x: np.ndarray, 
+        gamma: Optional[np.ndarray] = None, 
+        hE: Optional[float] = None,
+        use_hanna: bool = False,
+        temperature: float = 300.0,
+        gamma_scaling_alpha: Optional[np.ndarray] = None,
+        steepness_k: float = 15.0,
+        scaling_profile: str = "exponential",
+        force_recalc: bool = False
+    ):
+        x = np.asarray(x, dtype=float)
+        
+        if use_hanna:
+            pred_gamma, pred_hE = self.interpolate_thermo_properties(
+                x=x, 
+                temperature=temperature,
+                gamma_scaling_alpha=gamma_scaling_alpha,
+                scaling_profile=scaling_profile,
+                steepness_k = steepness_k
+            )
+            gamma = pred_gamma if gamma is None else np.asarray(gamma, dtype=float)
+            hE = pred_hE if hE is None else float(hE)
+        else:
+            gamma = np.ones_like(x) if gamma is None else np.asarray(gamma, dtype=float)
+            hE = 0.0 if hE is None else float(hE)
 
         state_changed = (self._current_x is None or 
-                         not np.allclose(self._current_x, x) or 
-                         not np.allclose(self._current_gamma, gamma))
+                        not np.allclose(self._current_x, x) or 
+                        not np.allclose(self._current_gamma, gamma) or
+                        self._current_hE != hE)
 
         if state_changed or force_recalc:
             self._current_x = x.copy()
             self._current_gamma = gamma.copy()
+            self._current_hE = hE
             self._sle_cache.clear()
             self._cea_cache.clear()
 
@@ -136,7 +269,6 @@ class Mixture:
         if self._sle_cache:
             return
 
-        # Explicitly initialize the solver right before using it
         self._init_sle_engine()
 
         N = len(self.compounds)
@@ -155,7 +287,6 @@ class Mixture:
         if self._cea_cache:
             return
 
-        # Explicitly initialize CEA right before running combustion loops
         self._init_cea_engine()
 
         N = len(self.compounds)
@@ -173,37 +304,30 @@ class Mixture:
         
         hc = self._reac.calc_property(self._cea_lib.ENTHALPY, weights, T_reactant) / self._cea_lib.R
 
-        # Extract the liquidus temperature for the CURRENT composition
+        # Incorporate Excess Enthalpy of Mixing (hE) into CEA Enthalpy Pool if present
+        if self._current_hE is not None and self._current_hE != 0.0:
+            # hE in J/mol converted to dimensionless enthalpy (hc) for CEA
+            hc += self._current_hE / self._cea_lib.R
+
+        # Extract liquidus temperature for phase transition correction
         self._ensure_sle_evaluated()
         mixture_melting_point = self._sle_cache["Solid-Liquid Equilibrium Temperature"]
         
-        # 3. If the mixture is thermodynamically a liquid at room temperature (298.15 K),
-        # inject the heat of fusion for components that are natively solid at 298.15 K.
         if mixture_melting_point <= 298.15:
             delta_h_phase_change = 0.0
             
             for i, comp in enumerate(self.compounds):
-                # If the pure compound's melting point is above room temp, it's natively solid.
-                # Since the mixture is liquid, it has absorbed its heat of fusion due to mixing.
                 if comp.T_fus > 298.0:
-                    # Scale by mole fraction (or convert to mass fraction if your CEA hc handles mass)
-                    # Since CEA's calc_property returns molar enthalpy over R (J/mol / R), 
-                    # we add the mole-fraction weighted molar heat of fusion divided by R.
                     delta_h_phase_change += self._current_x[i] * (comp.h_fus / self._cea_lib.R)
             
-            # Apply the phase transition energy boost to the fuel reactant pool
             hc += delta_h_phase_change
 
         self._solver_rocket.solve(self._solution, weights, pc_bar, hc=hc, supar=self.supar, iac=True)
         
-        h_reactants_j = hc * self._cea_lib.R * T_reactant
-        h_products_j = self._solution.enthalpy * self._cea_lib.R * self._solution.T
-
         self._cea_cache = {
             "Adiabatic Flame Temperature": self._solution.T,
             "Characteristic Velocity": self._solution.c_star,
             "Specific Impulse": self._solution.Isp/9.81,
-            # "h_combustion": h_reactants_j - h_products_j
         }
 
     # -------------------------------------------------------------------------
@@ -217,6 +341,14 @@ class Mixture:
     def names(self) -> List[str]:
         return [c.name for c in self.compounds]
     
+    @property
+    def current_gamma(self) -> Optional[np.ndarray]:
+        return self._current_gamma
+
+    @property
+    def current_hE(self) -> Optional[float]:
+        return self._current_hE
+
     @property
     def T_fus(self) -> float:
         self._ensure_sle_evaluated()

@@ -1,3 +1,6 @@
+# To setup conda use: eval "$(/home/aglotov/miniconda3/bin/conda shell.bash hook)"
+# Use CEARun
+
 import os
 import pandas as pd
 import numpy as np
@@ -19,9 +22,9 @@ def create_compound_from_smiles(input_smiles: str) -> Compound:
     mol = Chem.MolFromSmiles(str(input_smiles).strip())
     if mol is None:
         raise ValueError(f"Invalid SMILES string: {input_smiles}")
-    canonical_key = Chem.MolToSmiles(mol)
+    # canonical_key = Chem.MolToSmiles(mol)
     
-    row = pureComponents[pureComponents["SMILES"] == canonical_key].iloc[0]
+    row = pureComponents[pureComponents["SMILES"] == str(input_smiles).strip()].iloc[0]
         
     # Generate atomic formula dynamically for NASA-CEA
     mol_with_hs = Chem.AddHs(mol)
@@ -36,6 +39,7 @@ def create_compound_from_smiles(input_smiles: str) -> Compound:
     return Compound(
         name=str(row["Full Name"]),  
         mw=ExactMolWt(mol),
+        smiles=input_smiles,
         T_fus=float(row["Melting Temperature [K]"]),
         h_fus=float(row["Enthalpy of Fusion [kJ/mol]"])*1000.0,
         h_f_298=float(row["Enthalpy of Formation [kJ/mol]"])*1000.0,
@@ -47,28 +51,29 @@ if __name__ == "__main__":
     model_name = "20260918_110241"
     trainModel = False
     num_points = 101
-    output_dir = "data/output/20260918_110241"
+    output_dir = "data/output/20230921_WithHANNA_WithGP"
 
     # ====================================================================================
     # Train/load model
     print(f"=== Starting Step 1: Model Training / Loading ===")
-    predictor = MTGPR_Tm_Hfus_Hf(model_name=model_name)
-    saved_model_name = predictor.model_name
+    prop_predictor = MTGPR_Tm_Hfus_Hf(model_name=model_name)
+
+    saved_model_name = prop_predictor.model_name
     print(f"Using model name: {saved_model_name}")
 
     if trainModel:
-        predictor.train_and_save(train_filepath="data/input/MTGPR_Tm_Hfus_Hf/train.xlsx")
+        prop_predictor.train_and_save(train_filepath="data/input/MTGPR_Tm_Hfus_Hf/train.xlsx")
     else:
-        predictor.load_model()
+        prop_predictor.load_model()
 
     print(f"=== Starting Step 2: Workflow Preparation ===")
     filled_path, combos_path = prepare_MTGPR_Tm_Hfus_Hf(
         excel_path="data/input/pureComponents.xlsx",
-        predictor=predictor,
+        predictor=prop_predictor,
         combination_arities=[2],
     )
 
-    pureComponents = pd.read_excel(filled_path, sheet_name="Input")
+    pureComponents = pd.read_excel(filled_path, sheet_name="Pure Input")
     combinations = pd.read_excel(combos_path, sheet_name=None)
 
     print(f"=== Starting Step 3: SLE & CEA Screening ===")
@@ -106,17 +111,17 @@ if __name__ == "__main__":
                 # 3. Sweep across the N-dimensional composition matrix
                 for x_vec in x_grid_matrix:
                     # Pass the current composition row vector (e.g., [0.2, 0.5, 0.3]) to the state machine
-                    mixture.set_composition(x=x_vec)
+                    mixture.set_composition(x=x_vec, use_hanna=True, gamma_scaling_alpha=[0.0,0.0], steepness_k=10)
                     
-                    # Safely extract properties on-the-fly with a fallback catch
-                    try:
-                        current_isp = mixture.isp[2]
-                        current_t_adi = mixture.T_adi[0]
-                        current_c_star = mixture.c_star[0]
-                    except Exception:
-                        current_isp = np.nan
-                        current_t_adi = np.nan
-                        current_c_star = np.nan
+                    # # Safely extract properties on-the-fly with a fallback catch
+                    # try:
+                    #     current_isp = mixture.isp[2]
+                    #     current_t_adi = mixture.T_adi[0]
+                    #     current_c_star = mixture.c_star[0]
+                    # except Exception:
+                    #     current_isp = np.nan
+                    #     current_t_adi = np.nan
+                    #     current_c_star = np.nan
 
                     # 5. Build a dynamic row record mapping compositions back to column names cleanly
                     row_record = {}
@@ -124,12 +129,14 @@ if __name__ == "__main__":
                         row_record[f"{name} Molar Composition \n[%]"] = x_vec[i]
                         # If your Mixture class tracks liquidus temperatures per component:
                         row_record[f"{name} Liquidus Temperature \n[K]"] = mixture.T_liq[i]
+
+                        row_record[f"{name} Activity Coefficient \n[-]"] = mixture.current_gamma[i]
                         
                     # Append the thermodynamic metrics
                     row_record["Solid-Liquid Equilibrium Temperature \n[K]"] = mixture.T_fus
-                    row_record["Adiabatic Flame Temperature \n[K]"] = current_t_adi
-                    row_record["Characteristic Velocity \n[m/s]"] = current_c_star
-                    row_record["Specific Impulse \n[s]"] = current_isp
+                    # row_record["Adiabatic Flame Temperature \n[K]"] = current_t_adi
+                    # row_record["Characteristic Velocity \n[m/s]"] = current_c_star
+                    # row_record["Specific Impulse \n[s]"] = current_isp
                     
                     records.append(row_record)
 
@@ -141,12 +148,12 @@ if __name__ == "__main__":
 
                 os.makedirs(output_dir, exist_ok=True)
                 df_results.to_csv(os.path.join(output_dir, filename), index=False)
-                
+                    
             except Exception as e:
                 print(f"Skipping index row {idx} due to calculation error: {e}")
 
-plotScreeningResults(results_dir="data/output/20260918_110241", 
-                    y1_col="Solid-Liquid Equilibrium Temperature \n[K]", 
-                    y2_col="Specific Impulse \n[s]",
-                    y1_label="SLE Temperature (K)", 
-                    y2_label="Isp (s)")
+    # plotScreeningResults(results_dir=output_dir, 
+    #                     y1_col="Solid-Liquid Equilibrium Temperature \n[K]", 
+    #                     y2_col="Specific Impulse \n[s]",
+    #                     y1_label="SLE Temperature (K)", 
+    #                     y2_label="Isp (s)")
