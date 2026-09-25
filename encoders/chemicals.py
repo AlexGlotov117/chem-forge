@@ -74,6 +74,7 @@ from sklearn.feature_selection import VarianceThreshold
 from sklearn.linear_model import LassoCV
 from sklearn.preprocessing import StandardScaler
 from thermo.group_contribution.joback import Joback
+from sklearn.feature_selection import mutual_info_regression
 
 MONOATOMIC_ION_PROPERTIES = {
     # Cations
@@ -134,6 +135,15 @@ def get_rdkit_descriptors_with_names(mol, prefix=""):
                 desc_dict[col_name] = val if np.isfinite(val) else 0.0
             except Exception:
                 desc_dict[col_name] = 0.0
+
+    # relevant_keywords = ['fr_']
+
+    # enthalpy_descriptors = [
+    #     (name, func) for name, func in Descriptors._descList 
+    #     if any(key in name for key in relevant_keywords)
+    # ]
+
+    # print(f"Selected:\n {enthalpy_descriptors}")
     return desc_dict
 
 def get_morgan_fingerprint_dict(mol, radius=2, n_bits=32, prefix=""):
@@ -225,7 +235,51 @@ def get_3d_descriptors_with_names(mol, prefix=""):
 
     return d_3d
 
-def featurize_single_compound_to_dict(smiles, fp_bits=32):
+def get_element_counts(mol, prefix):
+    if mol is None:
+        return {
+            f"{prefix}_Count_C": 0, f"{prefix}_Count_N": 0, 
+            f"{prefix}_Count_O": 0, f"{prefix}_Count_B": 0, 
+            f"{prefix}_Count_F": 0, f"{prefix}_Count_Cl": 0
+        }
+    
+    atoms = mol.GetAtoms()
+    return {
+        f"{prefix}_Count_C": sum(1 for a in atoms if a.GetAtomicNum() == 6),
+        f"{prefix}_Count_N": sum(1 for a in atoms if a.GetAtomicNum() == 7),
+        f"{prefix}_Count_O": sum(1 for a in atoms if a.GetAtomicNum() == 8),
+        f"{prefix}_Count_B": sum(1 for a in atoms if a.GetAtomicNum() == 5),
+        f"{prefix}_Count_F": sum(1 for a in atoms if a.GetAtomicNum() == 9),
+        f"{prefix}_Count_Cl": sum(1 for a in atoms if a.GetAtomicNum() == 17),
+    }
+
+def get_bond_counts(mol, prefix):
+    """Dynamically counts exact bond types (e.g., C-H, C=C) in a molecule."""
+    if mol is None:
+        return {}
+    
+    # CRITICAL: RDKit hides H's by default. We must add them to count C-H, N-H, etc.
+    try:
+        mol_h = Chem.AddHs(mol)
+    except Exception:
+        mol_h = mol # Fallback if AddHs fails due to sanitization issues
+        
+    bond_counts = {}
+    
+    for bond in mol_h.GetBonds():
+        a1 = bond.GetBeginAtom().GetSymbol()
+        a2 = bond.GetEndAtom().GetSymbol()
+        btype = str(bond.GetBondType())  # Outputs 'SINGLE', 'DOUBLE', 'TRIPLE', 'AROMATIC'
+        
+        # Sort atomic symbols alphabetically so C-H and H-C are grouped together as H-C
+        elements = sorted([a1, a2])
+        bond_key = f"{prefix}_Bond_{elements[0]}_{btype}_{elements[1]}"
+        
+        bond_counts[bond_key] = bond_counts.get(bond_key, 0) + 1
+        
+    return bond_counts
+
+def featurize_single_compound_to_dict(smiles, fp_bits=16):
     """Featurizes SMILES into a composite dictionary containing 2D, 3D,
 
     fingerprints, and bulk thermodynamic descriptors.
@@ -265,17 +319,21 @@ def featurize_single_compound_to_dict(smiles, fp_bits=32):
             Descriptors.NumRotatableBonds(cation_mol) if cation_mol else 0
         )
         rot_an = Descriptors.NumRotatableBonds(anion_mol) if anion_mol else 0
-
-        # Substructure Fingerprints
-        fp_cat = get_morgan_fingerprint_dict(
-            cation_mol, n_bits=fp_bits, prefix="Cation"
-        )
-        fp_an = get_morgan_fingerprint_dict(
-            anion_mol, n_bits=fp_bits, prefix="Anion"
-        )
-        fp_neu = get_morgan_fingerprint_dict(
-            None, n_bits=fp_bits, prefix="Neutral"
-        )
+        if fp_bits > 0:
+            # Substructure Fingerprints
+            fp_cat = get_morgan_fingerprint_dict(
+                cation_mol, n_bits=fp_bits, prefix="Cation"
+            )
+            fp_an = get_morgan_fingerprint_dict(
+                anion_mol, n_bits=fp_bits, prefix="Anion"
+            )
+            fp_neu = get_morgan_fingerprint_dict(
+                None, n_bits=fp_bits, prefix="Neutral"
+            )
+        else:
+            fp_cat = None
+            fp_an = None
+            fp_neu = None
 
     else:
         parent_mol = mols[0] if len(mols) > 0 else None
@@ -292,15 +350,20 @@ def featurize_single_compound_to_dict(smiles, fp_bits=32):
         mw_cat, mw_an, tpsa_cat, tpsa_an = 0.0, 0.0, 0.0, 0.0
         rot_cat, rot_an = 0, 0
 
-        fp_cat = get_morgan_fingerprint_dict(
-            None, n_bits=fp_bits, prefix="Cation"
-        )
-        fp_an = get_morgan_fingerprint_dict(
-            None, n_bits=fp_bits, prefix="Anion"
-        )
-        fp_neu = get_morgan_fingerprint_dict(
-            parent_mol, n_bits=fp_bits, prefix="Neutral"
-        )
+        if fp_bits > 0:
+            fp_cat = get_morgan_fingerprint_dict(
+                None, n_bits=fp_bits, prefix="Cation"
+            )
+            fp_an = get_morgan_fingerprint_dict(
+                None, n_bits=fp_bits, prefix="Anion"
+            )
+            fp_neu = get_morgan_fingerprint_dict(
+                parent_mol, n_bits=fp_bits, prefix="Neutral"
+            )
+        else:
+            fp_cat = None
+            fp_an = None
+            fp_neu = None
 
     # =========================================================================
     # 2. Bulk & Physical Lattice Assembly Descriptors
@@ -308,17 +371,16 @@ def featurize_single_compound_to_dict(smiles, fp_bits=32):
     vol_cat = d_cat_3d.get("Cation_3D_VanDerWaalsVolume", 0.0)
     vol_an = d_an_3d.get("Anion_3D_VanDerWaalsVolume", 0.0)
 
-    # Bulk density proxies & Kapustinskii-like ionic packing terms
-    effective_vol = (
-        (vol_cat + vol_an)
-        if is_ionic
-        else d_neu_3d.get("Neutral_3D_VanDerWaalsVolume", 0.0)
-    )
-    total_mw = (
-        (mw_cat + mw_an)
-        if is_ionic
-        else (Descriptors.MolWt(mols[0]) if mols else 0.0)
-    )
+    effective_vol = (vol_cat + vol_an) if is_ionic else d_neu_3d.get("Neutral_3D_VanDerWaalsVolume", 0.0)
+    total_mw = (mw_cat + mw_an) if is_ionic else (Descriptors.MolWt(mols[0]) if mols else 0.0)
+
+    # NEW: Get actual formal charges for lattice energy calculation
+    q_cat = abs(Chem.GetFormalCharge(cation_mol)) if cation_mol else 0.0
+    q_an = abs(Chem.GetFormalCharge(anion_mol)) if anion_mol else 0.0
+
+    # NEW: True Kapustinskii Lattice Energy Proxy ( U ~ |q+ * q-| / (V^(1/3)) )
+    # Volume is proportional to r^3, so V^(1/3) gives the inter-ionic distance r
+    lattice_energy_proxy = (q_cat * q_an) / (effective_vol**(1/3) + 1e-5) if is_ionic else 0.0
 
     d_assembly = {
         "Assembly_is_ionic": is_ionic,
@@ -328,23 +390,43 @@ def featurize_single_compound_to_dict(smiles, fp_bits=32):
         "Assembly_volume_ratio": vol_cat / (vol_an + 1e-5),
         "Assembly_total_rotatable_bonds": float(rot_cat + rot_an),
         "Assembly_packing_density_proxy": total_mw / (effective_vol + 1e-5),
-        "Assembly_electrostatic_charge_density": (
-            (1.0 / (effective_vol + 1e-5)) if is_ionic else 0.0
-        ),
+        "Assembly_electrostatic_charge_density": lattice_energy_proxy,
     }
+
+    # =========================================================================
+    # NEW: Element Counts for Heat of Formation Additivity
+    # =========================================================================
+    if is_ionic == 1.0:
+        elem_cat = get_element_counts(cation_mol, prefix="Cation")
+        elem_an = get_element_counts(anion_mol, prefix="Anion")
+        elem_neu = get_element_counts(None, prefix="Neutral")
+    else:
+        parent_mol = mols[0] if len(mols) > 0 else None
+        elem_cat = get_element_counts(None, prefix="Cation")
+        elem_an = get_element_counts(None, prefix="Anion")
+        elem_neu = get_element_counts(parent_mol, prefix="Neutral")
+
+    # =========================================================================
+    # NEW: Exact Bond Type Counts for Heat of Formation
+    # =========================================================================
+    if is_ionic == 1.0:
+        bonds_cat = get_bond_counts(cation_mol, prefix="Cation")
+        bonds_an = get_bond_counts(anion_mol, prefix="Anion")
+        bonds_neu = get_bond_counts(None, prefix="Neutral")
+    else:
+        parent_mol = mols[0] if len(mols) > 0 else None
+        bonds_cat = get_bond_counts(None, prefix="Cation")
+        bonds_an = get_bond_counts(None, prefix="Anion")
+        bonds_neu = get_bond_counts(parent_mol, prefix="Neutral")
 
     # Combine everything
     return {
-        **d_cat_2d,
-        **d_an_2d,
-        **d_neu_2d,
-        **d_cat_3d,
-        **d_an_3d,
-        **d_neu_3d,
+        **d_cat_2d, **d_an_2d, **d_neu_2d,
+        **d_cat_3d, **d_an_3d, **d_neu_3d,
+        **elem_cat, **elem_an, **elem_neu,
+        **bonds_cat, **bonds_an, **bonds_neu,
         **d_assembly,
-        **fp_cat,
-        **fp_an,
-        **fp_neu,
+        **fp_cat, **fp_an, **fp_neu,
     }
 
 
@@ -361,7 +443,39 @@ class MolecularEncoder:
     def __init__(self, output_dir, variance_thresh=0.01, corr_thresh=0.90, override_features=None):
         self.variance_thresh = variance_thresh
         self.corr_thresh = corr_thresh
-        self.override_features = override_features or []
+        self.override_features = override_features or [
+            # "Cation_qed",
+            # "Neutral_FractionCSP3",
+            # "Assembly_mw_ratio",
+            # "Neutral_Kappa1",
+            # "Anion_Chi0v"
+            # "Anion_HallKierAlpha",
+            # "Anion_MinPartialCharge",
+            # "Cation_MaxPartialCharge",
+            # "Anion_BCUT2D_MWLOW",
+            # "Neutral_BCUT2D_MWHI",
+            # "Neutral_Ipc",
+            # "Neutral_3D_NPR1",
+            # "Assembly_electrostatic_charge_density",
+            # "Neutral_HeavyAtomCount",
+            # "Neutral_ExactMolWt",
+            # "Assembly_packing_density_proxy"
+
+            # "Neutral_ExactMolWt",
+            # "Neutral_HeavyAtomCount",
+            # "Assembly_electrostatic_charge_density",
+            # "Assembly_packing_density_proxy",
+            # # Neutral Shape (For non-salts)
+            # "Cation_Kappa1", "Cation_Kappa2", "Cation_Kappa3",
+            # # # Anion Shape (For salts)
+            # "Anion_Kappa1", "Anion_Kappa2", "Anion_Kappa3",
+
+            "Cation_fr_NH0", "Neutral_fr_NH0", "Anion_fr_NH0"
+            "Cation_fr_halogen", "Neutral_fr_halogen", "Anion_fr_halogen"
+            "Cation_fr_quatN", "Neutral_fr_quatN", "Anion_fr_quatN"
+            "Cation_fr_unbrch_alkane", "Neutral_fr_unbrch_alkane", "Anion_fr_unbrch_alkane"
+            "Cation_fr_alkyl_halide", "Neutral_fr_alkyl_halide", "Anion_fr_alkyl_halide"
+        ]
         self.selected_features = None
 
     def featurize(self, smiles_list):
@@ -417,7 +531,11 @@ class MolecularEncoder:
         vt.fit(df_clean)
         retained_var = set(df_clean.columns[vt.get_support()])
         retained_var.update(valid_overrides) # Explicitly keep overrides
-        df_var = df_clean[list(retained_var)].copy()
+        
+        # FIX: Sort the list to lock the column order alphabetically and ensure determinism
+        sorted_retained = sorted(list(retained_var))
+        df_var = df_clean[sorted_retained].copy()
+        n_after_var = df_var.shape[1]
 
         # Step 2: Collinearity Filter
         corr_matrix = df_var.corr().abs()
@@ -464,43 +582,43 @@ class MolecularEncoder:
                 std = 1.0 if std == 0 else std
                 Y_scaled[valid_mask, t_idx] = (col_data[valid_mask] - mean) / std
 
-        # Run LOOCV LASSO on Y_scaled 
+        # Run Mutual Information Regression
         feature_scores = {f: 0.0 for f in feature_names}
-        task_feature_scores = {task: {f: 0 for f in feature_names} for task in target_names}
+        task_feature_scores = {
+            task: {f: 0.0 for f in feature_names} for task in target_names
+        }
 
         for task_idx, task_name in enumerate(target_names):
-            y_task = Y_scaled[:, task_idx]  # <-- Use scaled Y!
+            y_task = Y_scaled[:, task_idx]
             valid_idx = np.where(~np.isnan(y_task))[0]
             if len(valid_idx) < 5:
                 continue
 
             X_valid, y_valid = X_scaled[valid_idx], y_task[valid_idx]
-            
-            for i in range(len(valid_idx)):
-                mask = np.ones(len(valid_idx), dtype=bool)
-                mask[i] = False
-                
-                lasso = LassoCV(cv=min(5, len(valid_idx)-2), max_iter=50000, random_state=42)
-                try:
-                    lasso.fit(X_valid[mask], y_valid[mask])
-                    for idx in np.where(np.abs(lasso.coef_) > 1e-5)[0]:
-                        feat = feature_names[idx]
-                        feature_scores[feat] += np.abs(lasso.coef_[idx])
-                        task_feature_scores[task_name][feat] += 1
-                except Exception:
-                    pass
 
-        # Sort ONLY non-override features by LASSO score
+            # Compute non-linear Mutual Information in one vectorized pass
+            mi_scores = mutual_info_regression(
+                X_valid, y_valid, n_neighbors=3, random_state=42
+            )
+
+            for idx, score in enumerate(mi_scores):
+                if score > 1e-4:  # Threshold for non-zero mutual info
+                    feat = feature_names[idx]
+                    feature_scores[feat] += score
+                    # Store exact MI score per task
+                    task_feature_scores[task_name][feat] += score
+
+        # Sort ONLY non-override features by MI score
         sorted_features = sorted(
             [f for f in feature_scores.items() if f[0] not in valid_overrides], 
             key=lambda x: x[1], 
             reverse=True
         )
 
-        # Grab top-ranked features from LASSO
-        top_ranked = [f[0] for f in sorted_features[:(max_features-len(valid_overrides))]]
+        # Grab top-ranked features
+        top_ranked = [f[0] for f in sorted_features[:(max_features - len(valid_overrides))]]
         
-        # Combine overrides + top LASSO features dynamically
+        # Combine overrides + top MI features dynamically
         final_selected = list(valid_overrides)
         for feat in top_ranked:
             if feat not in final_selected:
@@ -513,17 +631,50 @@ class MolecularEncoder:
             is_override = " [OVERRIDE]" if feat in valid_overrides else ""
             print(f"  {rank}. {feat:<35} (Score: {feature_scores.get(feat, 0.0):.3f}){is_override}")
 
-        # Plot Tier 2
+        # Plot Tier 2 (Updated for Mutual Information)
         if show_plots:
-            fig, ax = plt.subplots(figsize=(10, 8))
+            fig, ax = plt.subplots(figsize=(10, max(6, len(self.selected_features) * 0.35)))
+            
+            # Prepare DataFrame using the top 30 features (or available features)
+            n_display = min(len(feature_names), 30)
+            top_display_feats = [f[0] for f in sorted_features[:n_display]]
+            
+            # Include valid overrides in plot if present
+            display_feats = list(dict.fromkeys(list(valid_overrides) + top_display_feats))
+
             df_plot = pd.DataFrame([
-                {'Feature': feat, 'Task': task, 'Selection_Count': task_feature_scores[task][feat]}
-                for feat, _ in sorted_features[:min(len(feature_names), 40)]
+                {
+                    'Feature': feat + (" *" if feat in self.selected_features else ""),
+                    'Task': task, 
+                    'MI_Score': task_feature_scores[task][feat]
+                }
+                for feat in display_feats
                 for task in target_names
             ])
-            sns.barplot(data=df_plot, x='Selection_Count', y='Feature', hue='Task', ax=ax, palette='viridis')
-            ax.axhline(y=max_features - 0.5, color='red', linestyle='--', label=f'Cutoff (Top {max_features})')
-            ax.set_title("Tier 2 LOOCV-LASSO Feature Selection", fontweight='bold')
+            
+            sns.barplot(
+                data=df_plot, 
+                x='MI_Score', 
+                y='Feature', 
+                hue='Task', 
+                ax=ax, 
+                palette='viridis'
+            )
+            
+            # Draw cutoff horizontal line if cutoff point falls within displayed features
+            cutoff_index = max_features - len(valid_overrides)
+            if cutoff_index < len(display_feats):
+                ax.axhline(
+                    y=cutoff_index - 0.5, 
+                    color='red', 
+                    linestyle='--', 
+                    linewidth=1.5,
+                    label=f'Selection Cutoff (Top {max_features})'
+                )
+
+            ax.set_title("Tier 2 Mutual Information Feature Importance", fontweight='bold', fontsize=12)
+            ax.set_xlabel("Mutual Information Score", fontweight='bold')
+            ax.set_ylabel("Feature (* = Selected)", fontweight='bold')
             ax.legend(loc='lower right')
             plt.tight_layout()
             plt.show()

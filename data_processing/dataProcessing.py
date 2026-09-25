@@ -194,6 +194,7 @@ def extract_smiles_and_targets(filepath, target_columns=None, smiles_column='SMI
     """
     if target_columns is None:
         target_columns = ['T_m', 'dH_fus', 'dH_f']
+        # target_columns = ['dH_f']
         
     try:
         df = pd.read_excel(filepath, na_values=["—", "-", "N/A"])
@@ -246,7 +247,7 @@ def prepare_MTGPR_Tm_Hfus_Hf(
     excel_path="data/input/pureComponents.xlsx", 
     predictor = None,
     combination_arities=[2],
-    output_dir="data/output"
+    output_dir="data/output/default"
 ):
     """
     Checks for missing physical properties in pureComponents.xlsx, triggers GPR 
@@ -261,12 +262,8 @@ def prepare_MTGPR_Tm_Hfus_Hf(
     
     target_cols = [tm_col, hfus_col, hf_col]
     missing_mask = df[target_cols].isna().any(axis=1)
-    
-    # Determine output directory (use predictor's output dir if available)
-    if predictor is not None and hasattr(predictor, 'output_dir'):
-        out_filled_dir = predictor.output_dir
-    else:
-        out_filled_dir = output_dir
+
+    out_filled_dir = output_dir
 
     os.makedirs(out_filled_dir, exist_ok=True)
 

@@ -7,6 +7,7 @@ from datetime import datetime
 from data_processing.dataProcessing import extract_smiles_and_targets
 from encoders.chemicals import MolecularEncoder
 from models.gp import MTGPPipeline, _GPyTorchMTGPModel
+from gpytorch.kernels import ScaleKernel
 
 
 class MTGPR_Tm_Hfus_Hf:
@@ -25,6 +26,10 @@ class MTGPR_Tm_Hfus_Hf:
         if model_name is None:
             model_name = datetime.now().strftime("%Y%m%d_%H%M%S")
 
+        torch.manual_seed(42)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(42)
+
         self.model_name = model_name
         self.model_dir = model_dir
         self.output_dir = os.path.join(output_dir, self.model_name)
@@ -35,26 +40,62 @@ class MTGPR_Tm_Hfus_Hf:
         # Ensure model-specific output directory exists
         os.makedirs(self.output_dir, exist_ok=True)
         os.makedirs(self.model_dir, exist_ok=True)
-        
+
+        lr = 0.01
+        num_epochs = 3000
+        task_noise_map = {0: 0.001, 1:0.01, 2:0.1}
+        num_tasks = 3
+        self.num_X = 30
+        # linear_range = 7
+        mean_mod = gpytorch.means.ConstantMean()
+        covar_module = ScaleKernel(gpytorch.kernels.MaternKernel(nu=1.5, ard_num_dims=self.num_X, lengthscale_constraint=gpytorch.constraints.GreaterThan(1e-2))) #gpytorch.kernels.RBFKernel(ard_num_dims=30))
+        # linear_covar = gpytorch.kernels.ScaleKernel(gpytorch.kernels.LinearKernel(active_dims=list(range(0, linear_range))))
+        # matern_covar = gpytorch.kernels.ScaleKernel(gpytorch.kernels.MaternKernel(nu=2.5, active_dims=list(range(linear_range, self.num_X))))
+        # covar_module=(linear_covar + matern_covar) * gpytorch.kernels.IndexKernel(
+        #     num_tasks=num_tasks, rank=2, active_dims=[task_dim]
+        # )
         # Pass dedicated output directory to encoder
         self.encoder = MolecularEncoder(output_dir=self.output_dir)
-        self.pipeline = MTGPPipeline(num_tasks=3, num_epochs=1000)
+        self.pipeline = MTGPPipeline(
+                mean_module=mean_mod,
+                covar_module=covar_module,
+                num_tasks=num_tasks,
+                lr=lr,
+                num_epochs=num_epochs,
+                task_noise_map=task_noise_map
+            )
         self.is_trained = False
 
-    def train_and_save(self, train_filepath):
+        # 0.2974638052697237 
+        # Params = [max_features: 6, 
+        #           base_kernel: rbf, 
+        #           use_ard: True, 
+        #           lr: 0.010990838802648367, 
+        #           num_epochs: 3000, 
+        #           noise_task_0: 0.0013195053529382061, 
+        #           noise_task_1: 0.014860509392656391, 
+        #           noise_task_2: 0.0011029742935256713, 
+        #           mean_type: zero]
+
+
+    def train_and_save(self, train_filepath, test_filepath):
         print(f"--- Training new GPR Model: [{self.model_name}] ---")
         smiles_train, Y_train_raw = extract_smiles_and_targets(train_filepath)
+        smiles_test, Y_test_raw = extract_smiles_and_targets(test_filepath)
 
         # Target Transformation (dS_fus = dH_fus / T_m)
         Y_train_dS = Y_train_raw.copy()
         Y_train_dS[:, 0] = Y_train_raw[:, 1] / Y_train_raw[:, 0]
+        Y_test_dS = Y_test_raw.copy()
+        Y_test_dS[:, 0] = Y_test_raw[:, 1] / Y_test_raw[:, 0]
 
         # Calculate max_features as a clean integer
-        target_max_features = int(np.floor(Y_train_raw.shape[0] / 3.0))
+        target_max_features = self.num_X #int(np.floor(Y_train_raw.shape[0] / 2.0))
 
-        X_train = self.encoder.fit_transform_features(smiles_train, Y_train_dS, max_features=target_max_features)
+        X_train = self.encoder.fit_transform_features(smiles_train, Y_train_dS, target_names=['T_m', 'dH_fus', 'dH_f'], max_features=target_max_features, show_plots=False)
+        X_test = self.encoder.transform_features(smiles_test)
 
-        self.pipeline.fit(X_train.values, Y_train_dS)
+        self.pipeline.fit(X_train.values, Y_train_dS, X_test=X_test.values, Y_test=Y_test_dS)
 
         # Ensure model-specific folder exists
         os.makedirs(os.path.dirname(self.model_path), exist_ok=True)
@@ -132,7 +173,7 @@ class MTGPR_Tm_Hfus_Hf:
         self.pipeline.likelihood.eval()
 
         with torch.no_grad(), gpytorch.settings.fast_pred_var():
-            means, stds = self.pipeline.predict(X.values)
+            means, stds, _, _ = self.pipeline.predict(X.values)
 
         dS_mean, dS_std = means[:, 0], stds[:, 0]
         dH_fus_mean, dH_fus_std = means[:, 1], stds[:, 1]
