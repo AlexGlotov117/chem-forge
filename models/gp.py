@@ -551,8 +551,7 @@ class MTGPPipeline:
             dtype=torch.float32,
         )
 
-        self.likelihood = gpytorch.likelihoods.FixedNoiseGaussianLikelihood(
-            noise=train_noise, learn_additional_noise=False
+        self.likelihood = gpytorch.likelihoods.GaussianLikelihood(
         )
 
 
