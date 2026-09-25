@@ -193,8 +193,8 @@ def extract_smiles_and_targets(filepath, target_columns=None, smiles_column='SMI
     - Y: 2D numpy array of target property values.
     """
     if target_columns is None:
-        target_columns = ['T_m', 'dH_fus', 'dH_f']
-        # target_columns = ['dH_f']
+        # target_columns = ['T_m', 'dH_fus', 'dH_f']
+        target_columns = ['T_m', 'dH_fus']
         
     try:
         df = pd.read_excel(filepath, na_values=["—", "-", "N/A"])
@@ -287,8 +287,8 @@ def prepare_MTGPR_Tm_Hfus_Hf(
                 df.at[idx, tm_col] = preds["T_m"][rel_i]
             if pd.isna(df.at[idx, hfus_col]):
                 df.at[idx, hfus_col] = preds["dH_fus"][rel_i]
-            if pd.isna(df.at[idx, hf_col]):
-                df.at[idx, hf_col] = preds["dH_f"][rel_i]
+            # if pd.isna(df.at[idx, hf_col]):
+            #     df.at[idx, hf_col] = preds["dH_f"][rel_i]
                 
         filled_excel_path = os.path.join(out_filled_dir, "pureComponents_filled.xlsx")
         with pd.ExcelWriter(filled_excel_path, engine='openpyxl') as writer:

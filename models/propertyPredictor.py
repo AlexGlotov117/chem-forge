@@ -41,16 +41,18 @@ class MTGPR_Tm_Hfus_Hf:
         os.makedirs(self.output_dir, exist_ok=True)
         os.makedirs(self.model_dir, exist_ok=True)
 
-        lr = 0.01
-        num_epochs = 3000
-        task_noise_map = {0: 0.001, 1:0.01, 2:0.1}
-        num_tasks = 3
-        self.num_X = 30
-        # linear_range = 7
-        mean_mod = gpytorch.means.ConstantMean()
-        covar_module = ScaleKernel(gpytorch.kernels.MaternKernel(nu=1.5, ard_num_dims=self.num_X, lengthscale_constraint=gpytorch.constraints.GreaterThan(1e-2))) #gpytorch.kernels.RBFKernel(ard_num_dims=30))
-        # linear_covar = gpytorch.kernels.ScaleKernel(gpytorch.kernels.LinearKernel(active_dims=list(range(0, linear_range))))
-        # matern_covar = gpytorch.kernels.ScaleKernel(gpytorch.kernels.MaternKernel(nu=2.5, active_dims=list(range(linear_range, self.num_X))))
+        lr = 0.0005
+        num_epochs = 4000
+        task_noise_map = {0: 0.01, 1:0.1, 2:0.01}
+        num_tasks = 2
+        self.num_X = 34
+        linear_range = 7
+        mean_mod = gpytorch.means.LinearMean(input_size=self.num_X)
+        # covar_module = ScaleKernel(gpytorch.kernels.MaternKernel(nu=2.5, ard_num_dims=self.num_X)) #gpytorch.kernels.RBFKernel(ard_num_dims=30))
+
+        linear_covar = gpytorch.kernels.ScaleKernel(gpytorch.kernels.LinearKernel())
+        matern_covar = gpytorch.kernels.ScaleKernel(gpytorch.kernels.MaternKernel(nu=1.5))
+        covar_module = linear_covar + matern_covar
         # covar_module=(linear_covar + matern_covar) * gpytorch.kernels.IndexKernel(
         #     num_tasks=num_tasks, rank=2, active_dims=[task_dim]
         # )
@@ -92,7 +94,7 @@ class MTGPR_Tm_Hfus_Hf:
         # Calculate max_features as a clean integer
         target_max_features = self.num_X #int(np.floor(Y_train_raw.shape[0] / 2.0))
 
-        X_train = self.encoder.fit_transform_features(smiles_train, Y_train_dS, target_names=['T_m', 'dH_fus', 'dH_f'], max_features=target_max_features, show_plots=False)
+        X_train = self.encoder.fit_transform_features(smiles_train, Y_train_dS, target_names=['T_m', 'dH_fus'], max_features=target_max_features, show_plots=False)
         X_test = self.encoder.transform_features(smiles_test)
 
         self.pipeline.fit(X_train.values, Y_train_dS, X_test=X_test.values, Y_test=Y_test_dS)
@@ -177,7 +179,7 @@ class MTGPR_Tm_Hfus_Hf:
 
         dS_mean, dS_std = means[:, 0], stds[:, 0]
         dH_fus_mean, dH_fus_std = means[:, 1], stds[:, 1]
-        dH_f_mean, dH_f_std = means[:, 2], stds[:, 2]
+        # dH_f_mean, dH_f_std = means[:, 2], stds[:, 2]
 
         T_m_mean = dH_fus_mean / dS_mean
         T_m_std = np.sqrt((dH_fus_std / dS_mean)**2 + ((dH_fus_mean * dS_std) / (dS_mean**2))**2)
@@ -188,6 +190,6 @@ class MTGPR_Tm_Hfus_Hf:
             "T_m_std": T_m_std,
             "dH_fus": dH_fus_mean,
             "dH_fus_std": dH_fus_std,
-            "dH_f": dH_f_mean,
-            "dH_f_std": dH_f_std
+            # "dH_f": dH_f_mean,
+            # "dH_f_std": dH_f_std
         }

@@ -470,11 +470,11 @@ class MolecularEncoder:
             # # # Anion Shape (For salts)
             # "Anion_Kappa1", "Anion_Kappa2", "Anion_Kappa3",
 
-            "Cation_fr_NH0", "Neutral_fr_NH0", "Anion_fr_NH0"
-            "Cation_fr_halogen", "Neutral_fr_halogen", "Anion_fr_halogen"
-            "Cation_fr_quatN", "Neutral_fr_quatN", "Anion_fr_quatN"
-            "Cation_fr_unbrch_alkane", "Neutral_fr_unbrch_alkane", "Anion_fr_unbrch_alkane"
-            "Cation_fr_alkyl_halide", "Neutral_fr_alkyl_halide", "Anion_fr_alkyl_halide"
+            # "Cation_fr_NH0", "Neutral_fr_NH0", "Anion_fr_NH0"
+            # "Cation_fr_halogen", "Neutral_fr_halogen", "Anion_fr_halogen"
+            # "Cation_fr_quatN", "Neutral_fr_quatN", "Anion_fr_quatN"
+            # "Cation_fr_unbrch_alkane", "Neutral_fr_unbrch_alkane", "Anion_fr_unbrch_alkane"
+            # "Cation_fr_alkyl_halide", "Neutral_fr_alkyl_halide", "Anion_fr_alkyl_halide"
         ]
         self.selected_features = None
 

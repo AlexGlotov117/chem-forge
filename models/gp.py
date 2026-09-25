@@ -575,7 +575,7 @@ class MTGPPipeline:
             f"[MTGPPipeline] Optimization started ({self.num_epochs} epochs)..."
         )
 
-        with gpytorch.settings.cholesky_jitter(1e-3):
+        with gpytorch.settings.cholesky_jitter(1e-7):
             for epoch in range(1, self.num_epochs + 1):
                 # Standard Train Optimization Step
                 self.model.train()
