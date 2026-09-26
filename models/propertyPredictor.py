@@ -42,7 +42,7 @@ class MTGPR_Tm_Hfus_Hf:
         os.makedirs(self.model_dir, exist_ok=True)
 
         lr = 0.001
-        num_epochs = 10000
+        num_epochs = 8300
         task_noise_map = {0: 0.1, 1:0.01, 2:0.01}
         num_tasks = 2
         self.num_X = 8
