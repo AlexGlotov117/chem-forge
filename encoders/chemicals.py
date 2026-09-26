@@ -440,7 +440,7 @@ class MolecularEncoder:
     Handles feature generation, filtering, target transformation,
     and Joback physical prior calculations directly from SMILES.
     """
-    def __init__(self, output_dir, variance_thresh=0.01, corr_thresh=0.90, override_features=None):
+    def __init__(self, output_dir, variance_thresh=0.05, corr_thresh=0.98, override_features=None):
         self.variance_thresh = variance_thresh
         self.corr_thresh = corr_thresh
         self.override_features = override_features or [
