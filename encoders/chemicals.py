@@ -143,7 +143,7 @@ def get_rdkit_descriptors_with_names(mol, prefix=""):
     #     if any(key in name for key in relevant_keywords)
     # ]
 
-    # print(f"Selected:\n {enthalpy_descriptors}")
+    # print(f"Selected:\n {Descriptors._descList}")
     return desc_dict
 
 def get_morgan_fingerprint_dict(mol, radius=2, n_bits=32, prefix=""):
@@ -421,12 +421,12 @@ def featurize_single_compound_to_dict(smiles, fp_bits=16):
 
     # Combine everything
     return {
-        **d_cat_2d, **d_an_2d, **d_neu_2d,
-        **d_cat_3d, **d_an_3d, **d_neu_3d,
-        **elem_cat, **elem_an, **elem_neu,
-        **bonds_cat, **bonds_an, **bonds_neu,
+        **d_cat_2d, **d_an_2d, #**d_neu_2d,
+        **d_cat_3d, **d_an_3d, #**d_neu_3d,
+        **elem_cat, **elem_an, #**elem_neu,
+        # **bonds_cat, **bonds_an, **bonds_neu,
         **d_assembly,
-        **fp_cat, **fp_an, **fp_neu,
+        # **fp_cat, **fp_an, **fp_neu,
     }
 
 
@@ -444,9 +444,9 @@ class MolecularEncoder:
         self.variance_thresh = variance_thresh
         self.corr_thresh = corr_thresh
         self.override_features = override_features or [
-            # "Cation_qed",
+            "Cation_qed",
             # "Neutral_FractionCSP3",
-            # "Assembly_mw_ratio",
+            "Assembly_mw_ratio",
             # "Neutral_Kappa1",
             # "Anion_Chi0v"
             # "Anion_HallKierAlpha",
@@ -460,6 +460,16 @@ class MolecularEncoder:
             # "Neutral_HeavyAtomCount",
             # "Neutral_ExactMolWt",
             # "Assembly_packing_density_proxy"
+            # "Anion_LabuteASA",
+            "Cation_NumRotatableBonds",
+            "Cation_MolWt",
+            "Anion_MolWt",
+            # "Cation_Kappa1",
+            "Anion_Count_B",
+            "Cation_Count_C",
+            "Cation_Count_N",
+            "Assembly_electrostatic_charge_density",
+            "Cation_3D_Eccentricity",
 
             # "Neutral_ExactMolWt",
             # "Neutral_HeavyAtomCount",

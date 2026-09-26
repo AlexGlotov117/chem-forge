@@ -17,7 +17,7 @@ if __name__ == "__main__":
     saved_model_name = prop_predictor.model_name
     print(f"Using model name: {saved_model_name}")
 
-    prop_predictor.train_and_save(train_filepath="data/input/MTGPR_Tm_Hfus_Hf/train.xlsx", test_filepath="data/input/MTGPR_Tm_Hfus_Hf/test.xlsx")
+    prop_predictor.train_and_save(train_filepath="data/input/MTGPR_Tm_Hfus_Hf/train_TBABH.xlsx", test_filepath="data/input/MTGPR_Tm_Hfus_Hf/test.xlsx")
 
     print(f"=== Workflow Preparation ===")
     filled_path, combos_path = prepare_MTGPR_Tm_Hfus_Hf(
