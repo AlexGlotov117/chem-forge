@@ -42,7 +42,7 @@ class MTGPR_Tm_Hfus_Hf:
         os.makedirs(self.model_dir, exist_ok=True)
 
         lr = 0.001
-        num_epochs = 4000#7270
+        num_epochs = 10000#7270
         task_noise_map = {0: 0.1, 1:0.01, 2:0.01}
         num_tasks = 2
         self.num_X = 18
@@ -142,9 +142,7 @@ class MTGPR_Tm_Hfus_Hf:
         task_noise_map = {0: 1e-3, 1: 1e-4, 2: 5e-2}
         train_noise = torch.tensor([task_noise_map[i.item()] for i in self.pipeline.train_i], dtype=torch.float32)
 
-        self.pipeline.likelihood = gpytorch.likelihoods.FixedNoiseGaussianLikelihood(
-            noise=train_noise,
-            learn_additional_noise=False
+        self.pipeline.likelihood = gpytorch.likelihoods.GaussianLikelihood(
         )
 
         self.pipeline.model = _GPyTorchMTGPModel(

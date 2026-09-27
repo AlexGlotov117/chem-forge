@@ -48,10 +48,10 @@ def create_compound_from_smiles(input_smiles: str) -> Compound:
 
 if __name__ == "__main__":
     # USER PROVIDED INPUTS
-    model_name = "20260924"
+    model_name = "TestRSME000223"
     trainModel = False
     num_points = 101
-    output_dir = "data/output/20260924"
+    output_dir = "data/output/20260927"
 
     # ====================================================================================
     # Train/load model
