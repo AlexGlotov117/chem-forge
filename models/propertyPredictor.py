@@ -44,8 +44,8 @@ class MTGPR_Tm_Hfus_Hf:
         lr = 0.001
         num_epochs = 10000#7270
         task_noise_map = {0: 0.1, 1:0.01, 2:0.01}
-        num_tasks = 2
-        self.num_X = 18
+        num_tasks = 3
+        self.num_X = 30
         linear_range = 7
         mean_mod = gpytorch.means.LinearMean(input_size=self.num_X, bias=True)
         # mean_mod = gpytorch.means.ConstantMean()
@@ -96,7 +96,7 @@ class MTGPR_Tm_Hfus_Hf:
         # Calculate max_features as a clean integer
         target_max_features = self.num_X #int(np.floor(Y_train_raw.shape[0] / 2.0))
 
-        X_train = self.encoder.fit_transform_features(smiles_train, Y_train_dS, target_names=['T_m', 'dH_fus'], max_features=target_max_features, show_plots=False)
+        X_train = self.encoder.fit_transform_features(smiles_train, Y_train_dS, target_names=['T_m', 'dH_fus', 'H_f'], max_features=target_max_features, show_plots=False)
         X_test = self.encoder.transform_features(smiles_test)
 
         self.pipeline.fit(X_train.values, Y_train_dS, X_test=X_test.values, Y_test=Y_test_dS)

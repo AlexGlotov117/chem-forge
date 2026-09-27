@@ -193,8 +193,8 @@ def extract_smiles_and_targets(filepath, target_columns=None, smiles_column='SMI
     - Y: 2D numpy array of target property values.
     """
     if target_columns is None:
-        # target_columns = ['T_m', 'dH_fus', 'dH_f']
-        target_columns = ['T_m', 'dH_fus']
+        target_columns = ['T_m', 'dH_fus', 'dH_f']
+        # target_columns = ['T_m', 'dH_fus']
         
     try:
         df = pd.read_excel(filepath, na_values=["—", "-", "N/A"])
