@@ -261,6 +261,7 @@ def prepare_MTGPR_Tm_Hfus_Hf(
     hfus_col = "Enthalpy of Fusion [kJ/mol]"
     hfus_std_col = "Enthalpy of Fusion STDEV [kJ/mol]"
     hf_col = "Enthalpy of Formation [kJ/mol]"
+    hf_std_col = "Enthalpy of Formation STDEV [kJ/mol]"
     
     target_cols = [tm_col, hfus_col, hf_col]
     missing_mask = df[target_cols].isna().any(axis=1)
@@ -291,8 +292,9 @@ def prepare_MTGPR_Tm_Hfus_Hf(
             if pd.isna(df.at[idx, hfus_col]):
                 df.at[idx, hfus_col] = preds["dH_fus"][rel_i]
                 df.at[idx, hfus_std_col] = 2.0*np.sqrt(preds["dH_fus_std"][rel_i])
-            # if pd.isna(df.at[idx, hf_col]):
-            #     df.at[idx, hf_col] = preds["dH_f"][rel_i]
+            if pd.isna(df.at[idx, hf_col]):
+                df.at[idx, hf_col] = preds["dH_f"][rel_i]
+                df.at[idx, hf_std_col] = 2.0*np.sqrt(preds["dH_f_std"][rel_i])
                 
         filled_excel_path = os.path.join(out_filled_dir, "pureComponents_filled.xlsx")
         with pd.ExcelWriter(filled_excel_path, engine='openpyxl') as writer:

@@ -8,7 +8,7 @@ import numpy as np
 # USER CONFIGURATION
 # ==========================================
 # 1. File Path
-csv_log_path = Path("data/output/ALL3_TestRMSE00241/history.csv")
+csv_log_path = Path("data/output/ALL3_TestRMSE00241/history_15000.csv")
 
 
 # 2. Log Scale Toggle
@@ -20,6 +20,8 @@ TASK_METRICS = {
     1: {"name": "Enthalpy of Fusion", "unit": "kJ/mol", "color": "#DDB945"},
     2: {"name": "Enthalpy of Formation", "unit": "kJ/mol", "color": "#9D9795"},
 }
+
+selected_epochs = [8000]
 
 # 4. Global Plot Formatting Options
 PLOT_CONFIG = {
@@ -36,6 +38,11 @@ PLOT_CONFIG = {
     "test_style": "--",
     "test_label": "Testing",
     "line_width": 2.5,
+    # Vertical line style for selected epoch(s)
+    "epoch_line_color": "#000000",
+    "epoch_line_style": ":",
+    "epoch_line_width": 1.5,
+    "epoch_line_alpha": 0.8,
     # Font Sizes & Axes
     "label_fontsize": 11,
     "title_fontsize": 12,
@@ -47,6 +54,27 @@ PLOT_CONFIG = {
 
 PLOT_CONFIG["save_dir"].mkdir(parents=True, exist_ok=True)
 # ==========================================
+
+def add_epoch_vertical_lines(ax):
+    """Adds vertical lines for user-specified selected epochs and returns legend labels."""
+    if not selected_epochs:
+        return
+
+    for idx, ep in enumerate(selected_epochs):
+        # Label only the first line as "Selected Epoch" (or list specific values if multiple)
+        label = (
+            "Selected Epoch"
+        )
+
+        ax.axvline(
+            x=ep,
+            color=PLOT_CONFIG["epoch_line_color"],
+            linestyle=PLOT_CONFIG["epoch_line_style"],
+            linewidth=PLOT_CONFIG["epoch_line_width"],
+            alpha=PLOT_CONFIG["epoch_line_alpha"],
+            label=label,
+            zorder=1,
+        )
 
 # 1. Load Training Log CSV
 print(f"Loading training log: {csv_log_path}")
@@ -77,6 +105,7 @@ if "train_loss" in df_log.columns and "test_loss" in df_log.columns:
         linewidth=PLOT_CONFIG["line_width"],
         label=f"{PLOT_CONFIG['test_label']}",
     )
+    add_epoch_vertical_lines(ax)
 
     if use_log_scale:
         ax.set_yscale("log")
@@ -96,6 +125,7 @@ if "train_loss" in df_log.columns and "test_loss" in df_log.columns:
         alpha=PLOT_CONFIG["grid_alpha"],
     )
     ax.legend(
+        framealpha=1.0,
         frameon=True,
         loc=PLOT_CONFIG["legend_loc"],
         fontsize=PLOT_CONFIG["legend_fontsize"],
@@ -149,7 +179,7 @@ for task_id, info in TASK_METRICS.items():
             linewidth=PLOT_CONFIG["line_width"],
             label=PLOT_CONFIG["test_label"],
         )
-
+    add_epoch_vertical_lines(ax)
     if use_log_scale:
         ax.set_yscale("log")
 
@@ -182,6 +212,7 @@ for task_id, info in TASK_METRICS.items():
     
     # Legend automatically displays only labeled lines
     ax.legend(
+        framealpha=1.0,
         frameon=True,
         loc=PLOT_CONFIG["legend_loc"],
         fontsize=PLOT_CONFIG["legend_fontsize"],
