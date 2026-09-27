@@ -41,19 +41,19 @@ class MTGPR_Tm_Hfus_Hf:
         os.makedirs(self.output_dir, exist_ok=True)
         os.makedirs(self.model_dir, exist_ok=True)
 
-        lr = 0.001
-        num_epochs = 10000#7270
+        lr = 0.01
+        num_epochs = 30000#7270
         task_noise_map = {0: 0.1, 1:0.01, 2:0.01}
-        num_tasks = 3
-        self.num_X = 30
+        num_tasks = 2
+        self.num_X = 18
         linear_range = 7
         mean_mod = gpytorch.means.LinearMean(input_size=self.num_X, bias=True)
         # mean_mod = gpytorch.means.ConstantMean()
         # covar_module = ScaleKernel(gpytorch.kernels.MaternKernel(nu=2.5, ard_num_dims=self.num_X)) #gpytorch.kernels.RBFKernel(ard_num_dims=30))
         # covar_module = ScaleKernel(gpytorch.kernels.MaternKernel(nu=1.5, ard_num_dims=self.num_X))
-        covar_module = ScaleKernel(gpytorch.kernels.MaternKernel(nu=2.5, ard_num_dims=self.num_X))
+        covar_module = ScaleKernel(gpytorch.kernels.MaternKernel(nu=1.5, ard_num_dims=self.num_X))
         # linear_covar = gpytorch.kernels.ScaleKernel(gpytorch.kernels.LinearKernel())
-        # matern_covar = gpytorch.kernels.ScaleKernel(gpytorch.kernels.MaternKernel(nu=1.5))
+        # matern_covar = gpytorch.kernels.ScaleKernel(gpytorch.kernels.MaternKernel(nu=2.5, ard_num_dims=self.num_X))
         # covar_module = linear_covar + matern_covar
         
         # covar_module=(linear_covar + matern_covar) * gpytorch.kernels.IndexKernel(

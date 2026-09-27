@@ -25,6 +25,7 @@ class StandardGP:
 
 
 import numpy as np
+import pandas as pd
 from sklearn.preprocessing import StandardScaler
 import torch
 import gpytorch
@@ -223,6 +224,38 @@ class MTGPPipeline:
 
         return overall_rmse_scaled, per_task_rmse_phys
 
+    def save_history_to_csv(self, filepath: str = "training_history.csv"):
+        """Exports all tracked metrics across epochs to a single CSV file."""
+        # Start with base metrics
+        data = {
+            "epoch": self.history["epoch"],
+            "train_loss": self.history["train_loss"],
+        }
+
+        # Add optional test loss if present
+        if "test_loss" in self.history and len(self.history["test_loss"]) > 0:
+            data["test_loss"] = self.history["test_loss"]
+
+        # Add per-task train RMSE metrics
+        if "train_per_task_rmse_phys" in self.history:
+            for task_name, values in self.history[
+                "train_per_task_rmse_phys"
+            ].items():
+                data[f"train_rmse_{task_name}"] = values
+
+        # Add per-task test RMSE metrics
+        if "test_per_task_rmse_phys" in self.history:
+            for task_name, values in self.history[
+                "test_per_task_rmse_phys"
+            ].items():
+                if len(values) > 0:
+                    data[f"test_rmse_{task_name}"] = values
+
+        # Convert to pandas DataFrame and save
+        df = pd.DataFrame(data)
+        df.to_csv(filepath, index=False)
+        print(f"Training metrics successfully exported to {filepath}")
+
     def _init_live_plot(self):
         """Initializes a dynamic Grid layout for Loss + Per-Task subplots."""
         plt.ion()  # Non-blocking interactive mode
@@ -338,6 +371,7 @@ class MTGPPipeline:
             self.fig.canvas.draw()
             self.fig.canvas.flush_events()
             plt.pause(0.01)
+                
 
         except Exception:
             # Prevent crashes if window is manually closed or running headless
@@ -480,6 +514,7 @@ class MTGPPipeline:
                     print(log_msg)
 
         plt.ioff()
+        self.save_history_to_csv(filepath='data/output/history.csv')
         if live_plot and self.fig is not None and plt.fignum_exists(self.fig.number):
             plt.show()  # Keeps final figure open when script finishes
         

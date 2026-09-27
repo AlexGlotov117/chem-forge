@@ -424,7 +424,7 @@ def featurize_single_compound_to_dict(smiles, fp_bits=16):
         **d_cat_2d, **d_an_2d, **d_neu_2d,
         **d_cat_3d, **d_an_3d, **d_neu_3d,
         **elem_cat, **elem_an, **elem_neu,
-        # **bonds_cat, **bonds_an, **bonds_neu,
+        **bonds_cat, **bonds_an, **bonds_neu,
         **d_assembly,
         # **fp_cat, **fp_an, **fp_neu,
     }

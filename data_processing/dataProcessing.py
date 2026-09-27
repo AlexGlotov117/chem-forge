@@ -257,7 +257,9 @@ def prepare_MTGPR_Tm_Hfus_Hf(
     
     # Target column identifiers
     tm_col = "Melting Temperature [K]"
+    tm_std_col = "Melting Temperature STDEV [K]"
     hfus_col = "Enthalpy of Fusion [kJ/mol]"
+    hfus_std_col = "Enthalpy of Fusion STDEV [kJ/mol]"
     hf_col = "Enthalpy of Formation [kJ/mol]"
     
     target_cols = [tm_col, hfus_col, hf_col]
@@ -285,8 +287,10 @@ def prepare_MTGPR_Tm_Hfus_Hf(
             rel_i = missing_rows.index.get_loc(idx)
             if pd.isna(df.at[idx, tm_col]):
                 df.at[idx, tm_col] = preds["T_m"][rel_i]
+                df.at[idx, tm_std_col] = 2.0*np.sqrt(preds["T_m_std"][rel_i])
             if pd.isna(df.at[idx, hfus_col]):
                 df.at[idx, hfus_col] = preds["dH_fus"][rel_i]
+                df.at[idx, hfus_std_col] = 2.0*np.sqrt(preds["dH_fus_std"][rel_i])
             # if pd.isna(df.at[idx, hf_col]):
             #     df.at[idx, hf_col] = preds["dH_f"][rel_i]
                 
