@@ -8,7 +8,7 @@ from data_processing.dataProcessing import prepare_MTGPR_Tm_Hfus_Hf
 if __name__ == "__main__":
     # USER PROVIDED INPUTS
     # model_name = "MutualInformationApproach_v1"
-    model_name = "RSME_ALL_v4"
+    model_name = "RSME_v5"
 
     # ====================================================================================
     # Train/load model
@@ -23,7 +23,7 @@ if __name__ == "__main__":
 
     print(f"=== Workflow Preparation ===")
     filled_path, combos_path = prepare_MTGPR_Tm_Hfus_Hf(
-        # excel_path="data/input/pureComponents_2026DecJANNAF_testing_predicted.xlsx",
+        # excel_path="data/input/pureComponents_2026DecJANNAF_training_predicted.xlsx",
         excel_path="data/input/pureComponents.xlsx",
         predictor=prop_predictor,
         combination_arities=[2],

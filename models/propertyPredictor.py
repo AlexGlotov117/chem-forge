@@ -41,8 +41,8 @@ class MTGPR_Tm_Hfus_Hf:
         os.makedirs(self.output_dir, exist_ok=True)
         os.makedirs(self.model_dir, exist_ok=True)
 
-        lr = 0.0005
-        num_epochs = 15000#7270
+        lr = 0.01
+        num_epochs = 10000#7270
         task_noise_map = {0: 0.1, 1:0.01, 2:0.01}
         num_tasks = 3
         self.num_X = 30
@@ -179,7 +179,7 @@ class MTGPR_Tm_Hfus_Hf:
 
         dS_mean, dS_std = means[:, 0], stds[:, 0]
         dH_fus_mean, dH_fus_std = means[:, 1], stds[:, 1]
-        dH_f_mean, dH_f_std = means[:, 2], stds[:, 2]
+        # dH_f_mean, dH_f_std = means[:, 2], stds[:, 2]
 
         T_m_mean = dH_fus_mean / dS_mean
         T_m_std = np.sqrt((dH_fus_std / dS_mean)**2 + ((dH_fus_mean * dS_std) / (dS_mean**2))**2)

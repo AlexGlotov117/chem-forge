@@ -36,13 +36,28 @@ def create_compound_from_smiles(input_smiles: str) -> Compound:
     # Force a fallback to a short name if Symbol is missing, and slice at 15 chars max
     cea_name = str(row["Full Name"]).strip()[:15] # Hard limit to 15 characters for CEA safety
 
+    t_fus_mean = float(row["Melting Temperature [K]"])
+    t_fus_stdev = float(row["Melting Temperature STDEV [K]"])
+    val = np.random.normal(t_fus_mean+40.0, t_fus_stdev)
+    sampled_t_fus = val if val > 0 else np.finfo(float).eps
+
+    h_fus_mean = float(row["Enthalpy of Fusion [kJ/mol]"]) * 1000.0
+    h_fus_stdev = float(row["Enthalpy of Fusion STDEV [kJ/mol]"]) * 1000.0
+    val2 = np.random.normal(h_fus_mean, h_fus_stdev)
+    sampled_h_fus = val2 if val2  > 0 else np.finfo(float).eps
+
+    h_f_mean = float(row["Enthalpy of Formation [kJ/mol]"]) * 1000.0
+    h_f_stdev = float(row["Enthalpy of Formation STDEV [kJ/mol]"]) * 1000.0
+    val3 = np.random.normal(h_f_mean, h_f_stdev)
+    sampled_h_f = val3 if val3 > 0 else np.finfo(float).eps
+
     return Compound(
         name=str(row["Full Name"]),  
         mw=ExactMolWt(mol),
         smiles=input_smiles,
-        T_fus=float(row["Melting Temperature [K]"]),
-        h_fus=float(row["Enthalpy of Fusion [kJ/mol]"])*1000.0,
-        h_f_298=float(row["Enthalpy of Formation [kJ/mol]"])*1000.0,
+        T_fus=sampled_t_fus,
+        h_fus=sampled_h_fus,
+        h_f_298=sampled_h_f,
         formula=formula_dict
     )
 
@@ -51,27 +66,31 @@ if __name__ == "__main__":
     model_name = "TestRSME000223"
     trainModel = False
     num_points = 101
-    output_dir = "data/output/20260927"
+    output_dir = "data/output/ALL3_TestRMSE00241/CEA_SLE/testing"
+    num_samples = 10
 
     # ====================================================================================
     # Train/load model
-    print(f"=== Starting Step 1: Model Training / Loading ===")
-    prop_predictor = MTGPR_Tm_Hfus_Hf(model_name=model_name)
+    # print(f"=== Starting Step 1: Model Training / Loading ===")
+    # prop_predictor = MTGPR_Tm_Hfus_Hf(model_name=model_name)
 
-    saved_model_name = prop_predictor.model_name
-    print(f"Using model name: {saved_model_name}")
+    # saved_model_name = prop_predictor.model_name
+    # print(f"Using model name: {saved_model_name}")
 
-    if trainModel:
-        prop_predictor.train_and_save(train_filepath="data/input/MTGPR_Tm_Hfus_Hf/train.xlsx")
-    else:
-        prop_predictor.load_model()
+    # if trainModel:
+    #     prop_predictor.train_and_save(train_filepath="data/input/MTGPR_Tm_Hfus_Hf/train.xlsx")
+    # else:
+    #     prop_predictor.load_model()
 
-    print(f"=== Starting Step 2: Workflow Preparation ===")
-    filled_path, combos_path = prepare_MTGPR_Tm_Hfus_Hf(
-        excel_path="data/input/pureComponents.xlsx",
-        predictor=prop_predictor,
-        combination_arities=[2],
-    )
+    # print(f"=== Starting Step 2: Workflow Preparation ===")
+    # filled_path, combos_path = prepare_MTGPR_Tm_Hfus_Hf(
+    #     excel_path="data/input/pureComponents.xlsx",
+    #     predictor=prop_predictor,
+    #     combination_arities=[2],
+    # )
+
+    filled_path = "data/output/ALL3_TestRMSE00241/pureComponents_filled_testing_predicted_v3.xlsx"
+    combos_path="data/output/ALL3_TestRMSE00241/CEA_SLE/testing/combinations.xlsx"
 
     pureComponents = pd.read_excel(filled_path, sheet_name="Pure Input")
     combinations = pd.read_excel(combos_path, sheet_name=None)
@@ -84,73 +103,79 @@ if __name__ == "__main__":
         
         # Identify component columns dynamically for this specific sheet
         component_cols = [col for col in df_combos.columns if col.startswith("Component ")]
-        
-        # Loop through every row/combination in the current sheet
-        for idx, row in df_combos.iterrows():
-            row_smiles = [str(row[col]).strip() for col in component_cols if pd.notna(row[col])]
-            
-            if not row_smiles:
-                continue
-                
-            try:
-                # Generate the dynamic compound arrays using the SMILES strings directly
-                compounds_list = [create_compound_from_smiles(s) for s in row_smiles]
-                
-                # Use the display symbols to format a clean filename string
-                system_label = "_".join([c.name for c in compounds_list])
-                print(f" -> Sweeping system [{idx+1}]: {system_label}")
-                
-                # Build your uniform mixture engine
-                mixture = Mixture(compounds=compounds_list)
 
-                # Generate the composition matrix
-                x_grid_matrix = generate_x_grid(num_components=mixture.num_components, steps=num_points)
-
-                records = []
-
-                # 3. Sweep across the N-dimensional composition matrix
-                for x_vec in x_grid_matrix:
-                    # Pass the current composition row vector (e.g., [0.2, 0.5, 0.3]) to the state machine
-                    mixture.set_composition(x=x_vec, use_hanna=True, gamma_scaling_alpha=[0.0,0.0], steepness_k=10)
+        for sample in range(num_samples):
+            print(f"\n" + "#"*60)
+            print(f"  MONTE CARLO SAMPLE {sample + 1}/{num_samples}")
+            print("#"*60)
+            # Loop through every row/combination in the current sheet
+            for idx, row in df_combos.iterrows():
+                row_smiles = [str(row[col]).strip() for col in component_cols if pd.notna(row[col])]
+                
+                if not row_smiles:
+                    continue
                     
-                    # # Safely extract properties on-the-fly with a fallback catch
-                    # try:
-                    #     current_isp = mixture.isp[2]
-                    #     current_t_adi = mixture.T_adi[0]
-                    #     current_c_star = mixture.c_star[0]
-                    # except Exception:
-                    #     current_isp = np.nan
-                    #     current_t_adi = np.nan
-                    #     current_c_star = np.nan
+                try:
+                    # Generate the dynamic compound arrays using the SMILES strings directly
+                    compounds_list = [create_compound_from_smiles(s) for s in row_smiles]
+                    
+                    # Use the display symbols to format a clean filename string
+                    system_label = "_".join([c.name for c in compounds_list])
+                    print(f" -> Sweeping system [{idx+1}]: {system_label}")
+                    
+                    # Build your uniform mixture engine
+                    mixture = Mixture(compounds=compounds_list)
 
-                    # 5. Build a dynamic row record mapping compositions back to column names cleanly
-                    row_record = {}
-                    for i, name in enumerate(mixture.names):
-                        row_record[f"{name} Molar Composition \n[%]"] = x_vec[i]
-                        # If your Mixture class tracks liquidus temperatures per component:
-                        row_record[f"{name} Liquidus Temperature \n[K]"] = mixture.T_liq[i]
+                    # Generate the composition matrix
+                    x_grid_matrix = generate_x_grid(num_components=mixture.num_components, steps=num_points)
 
-                        row_record[f"{name} Activity Coefficient \n[-]"] = mixture.current_gamma[i]
+                    records = []
+
+                    # 3. Sweep across the N-dimensional composition matrix
+                    for x_vec in x_grid_matrix:
+                        # Pass the current composition row vector (e.g., [0.2, 0.5, 0.3]) to the state machine
+                        mixture.set_composition(x=x_vec, use_hanna=False, gamma_scaling_alpha=[0,0], steepness_k=10)
                         
-                    # Append the thermodynamic metrics
-                    row_record["Solid-Liquid Equilibrium Temperature \n[K]"] = mixture.T_fus
-                    # row_record["Adiabatic Flame Temperature \n[K]"] = current_t_adi
-                    # row_record["Characteristic Velocity \n[m/s]"] = current_c_star
-                    # row_record["Specific Impulse \n[s]"] = current_isp
-                    
-                    records.append(row_record)
+                        # # Safely extract properties on-the-fly with a fallback catch
+                        # try:
+                        #     current_isp = mixture.isp[2]
+                        #     current_t_adi = mixture.T_adi[0]
+                        #     current_c_star = mixture.c_star[0]
+                        # except Exception:
+                        #     current_isp = np.nan
+                        #     current_t_adi = np.nan
+                        #     current_c_star = np.nan
 
-                # 6. Convert to DataFrame and save to CSV
-                df_results = pd.DataFrame(records)
-                
-                system_label = "_".join(mixture.names)
-                filename = f"{system_label}.csv"
+                        # 5. Build a dynamic row record mapping compositions back to column names cleanly
+                        row_record = {}
+                        for i, name in enumerate(mixture.names):
+                            row_record[f"{name} Molar Composition \n[%]"] = x_vec[i]
+                            # If your Mixture class tracks liquidus temperatures per component:
+                            row_record[f"{name} Liquidus Temperature \n[K]"] = mixture.T_liq[i]
 
-                os.makedirs(output_dir, exist_ok=True)
-                df_results.to_csv(os.path.join(output_dir, filename), index=False)
+                            row_record[f"{name} Activity Coefficient \n[-]"] = mixture.current_gamma[i]
+                            
+                        # Append the thermodynamic metrics
+                        row_record["Solid-Liquid Equilibrium Temperature \n[K]"] = mixture.T_fus
+                        # row_record["Adiabatic Flame Temperature \n[K]"] = current_t_adi
+                        # row_record["Characteristic Velocity \n[m/s]"] = current_c_star
+                        # row_record["Specific Impulse \n[s]"] = current_isp
+                        
+                        records.append(row_record)
+
+                    # 6. Convert to DataFrame and save to CSV
+                    df_results = pd.DataFrame(records)
                     
-            except Exception as e:
-                print(f"Skipping index row {idx} due to calculation error: {e}")
+                    system_label = "_".join(mixture.names)
+                    filename = f"{system_label}_{sample}.csv"
+
+                    os.makedirs(output_dir, exist_ok=True)
+                    df_results.to_csv(os.path.join(output_dir, filename), index=False)
+                        
+                except Exception as e:
+                    print(f"Skipping index row {idx} due to calculation error: {e}")
+
+            
 
     # plotScreeningResults(results_dir=output_dir, 
     #                     y1_col="Solid-Liquid Equilibrium Temperature \n[K]", 

@@ -1,10 +1,12 @@
 from pathlib import Path
 import matplotlib.pyplot as plt
 import pandas as pd
+import numpy as np
+import re
 
 # Define paths
-output_dir = Path("data/output/20230921_WithHANNA_WithGP")
-save_dir = Path("data/output/20230921_WithHANNA_WithGP/comparison_plots")
+output_dir = Path("data/output/ALL3_TestRMSE00241/CEA_SLE/testing")
+save_dir = Path("data/output/ALL3_TestRMSE00241/CEA_SLE/testing")
 xlsx_path = "data/input/pureComponents.xlsx"
 sheet_name = "Binary Input"
 
@@ -24,12 +26,21 @@ csv_files = list(output_dir.glob("*.csv"))
 if not csv_files:
     print(f"No CSV files found in {output_dir}")
 
+system_groups = {}
 for csv_path in csv_files:
-    pair_name = csv_path.stem
-    if "_" not in pair_name:
+    match = re.search(r"^(.*)_(\d+)\.csv$", csv_path.name)
+    if not match:
+        continue
+    
+    system_base_name = match.group(1)  # e.g., "CompA_CompB"
+    system_groups.setdefault(system_base_name, []).append(csv_path)
+
+# 3. Process each system across all Monte Carlo samples
+for system_base_name, file_paths in system_groups.items():
+    if "_" not in system_base_name:
         continue
 
-    comp1, comp2 = [c.strip() for c in pair_name.split("_", 1)]
+    comp1, comp2 = [c.strip() for c in system_base_name.split("_", 1)]
 
     # Filter matching Experimental Data (check both A_B and B_A order)
     mask_forward = (df_exp["Chemical (1)"].str.lower() == comp1.lower()) & (
@@ -45,31 +56,59 @@ for csv_path in csv_files:
     if df_exp_match.empty:
         continue
 
-    # Load predicted CSV
-    df_pred = pd.read_csv(csv_path)
-    df_pred.columns = df_pred.columns.str.strip()
+    # Aggregate predictions across all sample runs
+    sample_t_list = []
+    x_pred = None
 
-    # Map composition and SLE temperature columns
-    comp1_cols = [
-        c for c in df_pred.columns if comp1.lower() in c.lower() and "molar composition" in c.lower()
-    ]
-    if not comp1_cols:
-        comp1_cols = [c for c in df_pred.columns if "molar composition" in c.lower()]
+    for csv_path in file_paths:
+        df_pred = pd.read_csv(csv_path)
+        df_pred.columns = df_pred.columns.str.strip()
 
-    sle_temp_cols = [c for c in df_pred.columns if "solid-liquid equilibrium temperature" in c.lower()]
+        # Map composition and SLE temperature columns
+        comp1_cols = [
+            c for c in df_pred.columns if comp1.lower() in c.lower() and "molar composition" in c.lower()
+        ]
+        if not comp1_cols:
+            comp1_cols = [c for c in df_pred.columns if "molar composition" in c.lower()]
 
-    if not comp1_cols or not sle_temp_cols:
-        print(f"Skipping {csv_path.name}: Could not map required CSV columns.")
+        sle_temp_cols = [c for c in df_pred.columns if "solid-liquid equilibrium temperature" in c.lower()]
+
+        if not comp1_cols or not sle_temp_cols:
+            continue
+
+        if x_pred is None:
+            x_pred = df_pred[comp1_cols[0]].values
+
+        sample_t_list.append(df_pred[sle_temp_cols[0]].values)
+
+    if not sample_t_list:
+        print(f"Skipping {system_base_name}: Could not process sample CSVs.")
         continue
 
-    x_pred = df_pred[comp1_cols[0]] 
-    t_pred = df_pred[sle_temp_cols[0]]
+    # Convert to 2D array: (num_samples, num_points)
+    t_matrix = np.array(sample_t_list)
 
-    # 3. Plotting
+    # Calculate Monte Carlo statistics across samples
+    t_mean = np.nanmean(t_matrix, axis=0)
+    t_std = np.nanstd(t_matrix, axis=0)
+    t_lower = t_mean - t_std
+    t_upper = t_mean + t_std
+
+    # 4. Plotting
     fig, ax = plt.subplots(figsize=(7, 5), dpi=120)
 
-    # Plot predicted curve
-    ax.plot(x_pred, t_pred, label="Predicted (HANNA / Model)", color="#1f77b4", linewidth=2)
+    # Plot Monte Carlo mean line
+    ax.plot(x_pred, t_mean, label="Monte Carlo Mean", color="#1f77b4", linewidth=2)
+
+    # Plot Monte Carlo uncertainty spread shading (±1 std)
+    ax.fill_between(
+        x_pred,
+        t_lower,
+        t_upper,
+        color="#1f77b4",
+        alpha=0.3,
+        label="Monte Carlo Spread",
+    )
 
     # Extract experimental x and T
     if mask_forward.any():
@@ -100,9 +139,9 @@ for csv_path in csv_files:
 
     fig.tight_layout()
 
-    # Save figure and close to free memory
-    save_path = save_dir / f"{pair_name}_SLE_Comparison.png"
+    # Save figure
+    save_path = save_dir / f"{system_base_name}_SLE_MonteCarlo_Comparison.png"
     fig.savefig(save_path, dpi=300)
     plt.close(fig)
 
-    print(f"Saved plot: {save_path}")
+    print(f"Saved plot: {save_path} (from {len(file_paths)} MC samples)")

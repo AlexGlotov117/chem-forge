@@ -421,10 +421,10 @@ def featurize_single_compound_to_dict(smiles, fp_bits=16):
 
     # Combine everything
     return {
-        **d_cat_2d, **d_an_2d, **d_neu_2d,
-        **d_cat_3d, **d_an_3d, **d_neu_3d,
-        **elem_cat, **elem_an, **elem_neu,
-        **bonds_cat, **bonds_an, **bonds_neu,
+        **d_cat_2d, **d_an_2d, #**d_neu_2d,
+        **d_cat_3d, **d_an_3d, #**d_neu_3d,
+        **elem_cat, **elem_an, #**elem_neu,
+        **bonds_cat, **bonds_an, #**bonds_neu,
         **d_assembly,
         # **fp_cat, **fp_an, **fp_neu,
     }
@@ -440,7 +440,7 @@ class MolecularEncoder:
     Handles feature generation, filtering, target transformation,
     and Joback physical prior calculations directly from SMILES.
     """
-    def __init__(self, output_dir, variance_thresh=0.05, corr_thresh=0.98, override_features=None):
+    def __init__(self, output_dir, variance_thresh=0.01, corr_thresh=0.99, override_features=None):
         self.variance_thresh = variance_thresh
         self.corr_thresh = corr_thresh
         self.override_features = override_features or [
