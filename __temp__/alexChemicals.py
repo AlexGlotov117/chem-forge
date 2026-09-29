@@ -60,9 +60,9 @@ class Compound:
 @dataclass
 class Mixture:
     compounds: List[Compound]
-    oxidizer_name: str = "Air"
+    oxidizer_name: str = "H2O2(L)"
     phi: float = 1.0
-    pc_psi: float = 200.0
+    pc_psi: float = 400.0
     supar: List[float] = field(default_factory=lambda: [20.0])
     
     def __post_init__(self):

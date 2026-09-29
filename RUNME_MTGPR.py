@@ -7,7 +7,7 @@ from data_processing.dataProcessing import prepare_MTGPR_Tm_Hfus_Hf
 
 if __name__ == "__main__":
     # USER PROVIDED INPUTS
-    # model_name = "MutualInformationApproach_v1"
+    # model_name = "TestRSME002335"
     model_name = "RSME_v5"
 
     # ====================================================================================

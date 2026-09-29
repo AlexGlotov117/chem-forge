@@ -10,7 +10,7 @@ from sklearn.metrics import mean_squared_error, r2_score
 # ==========================================
 # 1. File paths
 actual_xlsx = Path("data/input/pureComponents_2026DecJANNAF_testing_actual.xlsx")
-predicted_xlsx = Path("data/output/ALL3_TestRMSE00241/pureComponents_filled_testing_predicted_v2.xlsx")
+predicted_xlsx = Path("data/output/ALL3_TestRMSE00241/pureComponents_filled_testing_predicted_v4.xlsx")
 
 # 2. Sheets to process (Set to None to process all sheets, or specify list: ["Sheet1", "Sheet2"])
 actual_sheets = None
@@ -51,8 +51,8 @@ PLOT_CONFIG = {
     # Error bars style
     # "errorbar_color": "#8E6F3E",
     "errorbar_alpha": 0.7,
-    "errorbar_capsize": 10,
-    "errorbar_linewidth": 3.0,
+    "errorbar_capsize": 4,
+    "errorbar_linewidth": 2.0,
     # 1:1 Parity line style
     "line_color": "#000000",
     "line_style": "--",
@@ -262,10 +262,10 @@ else:
     )
 
     # Calculate Symmetric Bounds for a Perfect Square Axis Range
-    global_min = min(y_actual.min(), y_pred.min())
-    global_max = max(y_actual.max(), y_pred.max())
-    padding = (global_max - global_min) * 0.6
-    axis_min, axis_max = global_min - padding, global_max + padding
+    global_min = min(y_actual.min(), y_pred.min()) #- y_err
+    global_max = max(y_actual.max(), y_pred.max()) #+ y_err 
+    padding = (global_max - global_min) * 0.5
+    axis_min, axis_max = global_min - padding, global_max +  padding
 
     # 1:1 Parity Line
     ax.plot(

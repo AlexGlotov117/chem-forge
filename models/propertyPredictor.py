@@ -41,14 +41,14 @@ class MTGPR_Tm_Hfus_Hf:
         os.makedirs(self.output_dir, exist_ok=True)
         os.makedirs(self.model_dir, exist_ok=True)
 
-        lr = 0.01
-        num_epochs = 10000#7270
+        lr = 0.05
+        num_epochs = 60000#7270
         task_noise_map = {0: 0.1, 1:0.01, 2:0.01}
         num_tasks = 3
-        self.num_X = 30
+        self.num_X = 44
         linear_range = 7
-        mean_mod = gpytorch.means.LinearMean(input_size=self.num_X, bias=True)
-        # mean_mod = gpytorch.means.ConstantMean()
+        # mean_mod = gpytorch.means.LinearMean(input_size=self.num_X, bias=True)
+        mean_mod = gpytorch.means.ConstantMean()
         # covar_module = ScaleKernel(gpytorch.kernels.MaternKernel(nu=2.5, ard_num_dims=self.num_X)) #gpytorch.kernels.RBFKernel(ard_num_dims=30))
         # covar_module = ScaleKernel(gpytorch.kernels.MaternKernel(nu=1.5, ard_num_dims=self.num_X))
         covar_module = ScaleKernel(gpytorch.kernels.MaternKernel(nu=1.5, ard_num_dims=self.num_X))
@@ -96,7 +96,7 @@ class MTGPR_Tm_Hfus_Hf:
         # Calculate max_features as a clean integer
         target_max_features = self.num_X #int(np.floor(Y_train_raw.shape[0] / 2.0))
 
-        X_train = self.encoder.fit_transform_features(smiles_train, Y_train_dS, target_names=['T_m', 'dH_fus', 'H_f'], max_features=target_max_features, show_plots=False)
+        X_train = self.encoder.fit_transform_features(smiles_train, Y_train_dS, target_names=['T_m', 'dH_fus'], max_features=target_max_features, show_plots=False)
         X_test = self.encoder.transform_features(smiles_test)
 
         self.pipeline.fit(X_train.values, Y_train_dS, X_test=X_test.values, Y_test=Y_test_dS)
@@ -179,7 +179,7 @@ class MTGPR_Tm_Hfus_Hf:
 
         dS_mean, dS_std = means[:, 0], stds[:, 0]
         dH_fus_mean, dH_fus_std = means[:, 1], stds[:, 1]
-        # dH_f_mean, dH_f_std = means[:, 2], stds[:, 2]
+        dH_f_mean, dH_f_std = means[:, 2], stds[:, 2]
 
         T_m_mean = dH_fus_mean / dS_mean
         T_m_std = np.sqrt((dH_fus_std / dS_mean)**2 + ((dH_fus_mean * dS_std) / (dS_mean**2))**2)

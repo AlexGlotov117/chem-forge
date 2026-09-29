@@ -8,7 +8,7 @@ import numpy as np
 # USER CONFIGURATION
 # ==========================================
 # 1. File Path
-csv_log_path = Path("data/output/ALL3_TestRMSE00241/history_15000.csv")
+csv_log_path = Path("data/output/ALL3_RSME000223_v2/history_60000.csv")
 
 
 # 2. Log Scale Toggle
@@ -16,16 +16,16 @@ use_log_scale = True  # Set to True for log scale on y-axis, False for linear sc
 
 # 3. Task Definitions (Map task column index to display name, unit, and unique color)
 TASK_METRICS = {
-    0: {"name": "Melting Temperature", "unit": "K", "color": "#8E6F3E"},
+    0: {"name": "Entropy of Fusion", "unit": "kJ/(mol K)", "color": "#8E6F3E"},
     1: {"name": "Enthalpy of Fusion", "unit": "kJ/mol", "color": "#DDB945"},
     2: {"name": "Enthalpy of Formation", "unit": "kJ/mol", "color": "#9D9795"},
 }
 
-selected_epochs = [8000]
+selected_epochs = [50000]
 
 # 4. Global Plot Formatting Options
 PLOT_CONFIG = {
-    "save_dir": Path("data/output/ALL3_TestRMSE00241"),
+    "save_dir": Path("data/output/ALL3_RSME000223_v2"),
     "fig_size": (3, 3),
     "dpi": 300,
     "display_dpi": 120,
@@ -127,7 +127,7 @@ if "train_loss" in df_log.columns and "test_loss" in df_log.columns:
     ax.legend(
         framealpha=1.0,
         frameon=True,
-        loc=PLOT_CONFIG["legend_loc"],
+        loc="upper right",
         fontsize=PLOT_CONFIG["legend_fontsize"],
     )
 
@@ -217,6 +217,13 @@ for task_id, info in TASK_METRICS.items():
         loc=PLOT_CONFIG["legend_loc"],
         fontsize=PLOT_CONFIG["legend_fontsize"],
     )
+
+    if task_id == 0:
+        ax.set_ylim(5e-5, 5e-1)
+    elif task_id == 1:
+        ax.set_ylim(1e-2, 200)
+    elif task_id == 2:
+        ax.set_ylim(0.0008, 5000)
 
     fig.tight_layout()
 

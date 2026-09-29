@@ -49,7 +49,7 @@ def create_compound_from_smiles(input_smiles: str) -> Compound:
     h_f_mean = float(row["Enthalpy of Formation [kJ/mol]"]) * 1000.0
     h_f_stdev = float(row["Enthalpy of Formation STDEV [kJ/mol]"]) * 1000.0
     val3 = np.random.normal(h_f_mean, h_f_stdev)
-    sampled_h_f = val3 if val3 > 0 else np.finfo(float).eps
+    sampled_h_f = val3
 
     return Compound(
         name=str(row["Full Name"]),  
@@ -134,17 +134,17 @@ if __name__ == "__main__":
                     # 3. Sweep across the N-dimensional composition matrix
                     for x_vec in x_grid_matrix:
                         # Pass the current composition row vector (e.g., [0.2, 0.5, 0.3]) to the state machine
-                        mixture.set_composition(x=x_vec, use_hanna=False, gamma_scaling_alpha=[0,0], steepness_k=10)
+                        mixture.set_composition(x=x_vec, use_hanna=True, gamma_scaling_alpha=[-0.1,-0.1], steepness_k=1)
                         
-                        # # Safely extract properties on-the-fly with a fallback catch
-                        # try:
-                        #     current_isp = mixture.isp[2]
-                        #     current_t_adi = mixture.T_adi[0]
-                        #     current_c_star = mixture.c_star[0]
-                        # except Exception:
-                        #     current_isp = np.nan
-                        #     current_t_adi = np.nan
-                        #     current_c_star = np.nan
+                        # Safely extract properties on-the-fly with a fallback catch
+                        try:
+                            current_isp = mixture.isp[2]
+                            current_t_adi = mixture.T_adi[0]
+                            current_c_star = mixture.c_star[0]
+                        except Exception:
+                            current_isp = np.nan
+                            current_t_adi = np.nan
+                            current_c_star = np.nan
 
                         # 5. Build a dynamic row record mapping compositions back to column names cleanly
                         row_record = {}
@@ -157,9 +157,9 @@ if __name__ == "__main__":
                             
                         # Append the thermodynamic metrics
                         row_record["Solid-Liquid Equilibrium Temperature \n[K]"] = mixture.T_fus
-                        # row_record["Adiabatic Flame Temperature \n[K]"] = current_t_adi
-                        # row_record["Characteristic Velocity \n[m/s]"] = current_c_star
-                        # row_record["Specific Impulse \n[s]"] = current_isp
+                        row_record["Adiabatic Flame Temperature \n[K]"] = current_t_adi
+                        row_record["Characteristic Velocity \n[m/s]"] = current_c_star
+                        row_record["Specific Impulse \n[s]"] = current_isp
                         
                         records.append(row_record)
 

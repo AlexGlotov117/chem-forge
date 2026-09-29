@@ -4,6 +4,9 @@ import pandas as pd
 import numpy as np
 import re
 
+# plot_mode = "with_experimental"
+plot_mode = "all_without_experimental"
+
 # Define paths
 output_dir = Path("data/output/ALL3_TestRMSE00241/CEA_SLE/testing")
 save_dir = Path("data/output/ALL3_TestRMSE00241/CEA_SLE/testing")
@@ -13,12 +16,13 @@ sheet_name = "Binary Input"
 # Create output folder for plots if it doesn't exist
 save_dir.mkdir(parents=True, exist_ok=True)
 
-# 1. Load Experimental Data
-df_exp = pd.read_excel(xlsx_path, sheet_name=sheet_name)
-
-# Ensure string types and clean column names
-df_exp["Chemical (1)"] = df_exp["Chemical (1)"].astype(str).str.strip()
-df_exp["Chemical (2)"] = df_exp["Chemical (2)"].astype(str).str.strip()
+# 1. Load Experimental Data (only if needed)
+df_exp = None
+if plot_mode == "with_experimental":
+    df_exp = pd.read_excel(xlsx_path, sheet_name=sheet_name)
+    # Ensure string types and clean column names
+    df_exp["Chemical (1)"] = df_exp["Chemical (1)"].astype(str).str.strip()
+    df_exp["Chemical (2)"] = df_exp["Chemical (2)"].astype(str).str.strip()
 
 # 2. Iterate through predicted CSVs
 csv_files = list(output_dir.glob("*.csv"))
@@ -42,19 +46,24 @@ for system_base_name, file_paths in system_groups.items():
 
     comp1, comp2 = [c.strip() for c in system_base_name.split("_", 1)]
 
-    # Filter matching Experimental Data (check both A_B and B_A order)
-    mask_forward = (df_exp["Chemical (1)"].str.lower() == comp1.lower()) & (
-        df_exp["Chemical (2)"].str.lower() == comp2.lower()
-    )
-    mask_reverse = (df_exp["Chemical (1)"].str.lower() == comp2.lower()) & (
-        df_exp["Chemical (2)"].str.lower() == comp1.lower()
-    )
+    # Handle experimental data checking based on plot_mode
+    df_exp_match = pd.DataFrame()
+    mask_forward = pd.Series(dtype=bool)
 
-    df_exp_match = df_exp[mask_forward | mask_reverse].copy()
+    if plot_mode == "with_experimental" and df_exp is not None:
+        # Filter matching Experimental Data (check both A_B and B_A order)
+        mask_forward = (df_exp["Chemical (1)"].str.lower() == comp1.lower()) & (
+            df_exp["Chemical (2)"].str.lower() == comp2.lower()
+        )
+        mask_reverse = (df_exp["Chemical (1)"].str.lower() == comp2.lower()) & (
+            df_exp["Chemical (2)"].str.lower() == comp1.lower()
+        )
 
-    # Skip plotting if NO experimental data exists for this pair
-    if df_exp_match.empty:
-        continue
+        df_exp_match = df_exp[mask_forward | mask_reverse].copy()
+
+        # Skip plotting if NO experimental data exists for this pair in this mode
+        if df_exp_match.empty:
+            continue
 
     # Aggregate predictions across all sample runs
     sample_t_list = []
@@ -110,24 +119,25 @@ for system_base_name, file_paths in system_groups.items():
         label="Monte Carlo Spread",
     )
 
-    # Extract experimental x and T
-    if mask_forward.any():
-        x_exp = df_exp_match["Composition (1)"]
-    else:
-        x_exp = 1.0 - df_exp_match["Composition (2)"]
+    # Conditionally plot experimental points
+    if plot_mode == "with_experimental" and not df_exp_match.empty:
+        if mask_forward.any():
+            x_exp = df_exp_match["Composition (1)"]
+        else:
+            x_exp = 1.0 - df_exp_match["Composition (2)"]
 
-    t_exp = df_exp_match["Temperature"]
+        t_exp = df_exp_match["Temperature"]
 
-    # Plot experimental points
-    ax.scatter(
-        x_exp,
-        t_exp,
-        color="#d62728",
-        edgecolor="black",
-        s=50,
-        zorder=5,
-        label="Experimental Data",
-    )
+        # Plot experimental points
+        ax.scatter(
+            x_exp,
+            t_exp,
+            color="#d62728",
+            edgecolor="black",
+            s=50,
+            zorder=5,
+            label="Experimental Data",
+        )
 
     # Formatting
     ax.set_xlabel(f"Mole Fraction {comp1} ($x_1$)", fontsize=11)
@@ -140,7 +150,8 @@ for system_base_name, file_paths in system_groups.items():
     fig.tight_layout()
 
     # Save figure
-    save_path = save_dir / f"{system_base_name}_SLE_MonteCarlo_Comparison.png"
+    mode_suffix = "WithExp" if plot_mode == "with_experimental" else "PredOnly"
+    save_path = save_dir / f"{system_base_name}_SLE_MonteCarlo_{mode_suffix}.png"
     fig.savefig(save_path, dpi=300)
     plt.close(fig)
 

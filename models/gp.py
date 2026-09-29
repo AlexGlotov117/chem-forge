@@ -58,7 +58,7 @@ class _GPyTorchMTGPModel(gpytorch.models.ExactGP):
 
         # Task covariance kernel (learns task-to-task correlation matrix)
         self.task_covar_module = gpytorch.kernels.IndexKernel(
-            num_tasks=num_tasks, rank=1
+            num_tasks=num_tasks, rank=2
         )
 
     def forward(self, x, i):
